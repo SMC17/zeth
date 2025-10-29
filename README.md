@@ -16,11 +16,19 @@ Zeth aims to become the reference implementation for Ethereum in Zig, providing:
 - **Clarity**: Clean, readable code that serves as documentation
 - **Community**: Open, welcoming, and collaborative development
 
-## ⚠️ Project Status: Beta (v0.2.0) - Production-Ready EVM
+## ⚠️ Project Status: Alpha (v0.2.0) - VALIDATION IN PROGRESS
 
-**Current State**: Production-ready EVM, ready for integration and testing
+**Current State**: Implementation complete, Ethereum validation in progress
 
-We've built a **real, working, tested** Ethereum Virtual Machine with comprehensive functionality. Not vaporware - **actual working code you can run today.**
+**CRITICAL**: We're in **validation mode**. We built a comprehensive EVM implementation (3,488 LOC, 80+ opcodes, 66 tests passing). Now we're validating against ACTUAL Ethereum test vectors. **We will NOT launch until validated.**
+
+**Validation Results So Far**:
+- ✅ RLP Encoding: **89.3% pass** against Ethereum tests (25/28)
+- ⚠️ VM Opcodes: Not yet tested against Ethereum
+- ⚠️ Gas Costs: Not yet verified
+- ⚠️ Real Contracts: Not yet attempted
+
+**We're building in public with radical honesty. Found bugs? Good. We'll fix them.**
 
 ### What Works ✅
 - Core data structures (Address, Hash, U256, Transaction, Block, Account)
