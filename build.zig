@@ -29,6 +29,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     evm_mod.addImport("types", types_mod);
+    evm_mod.addImport("crypto", crypto_mod);
 
     const state_mod = b.addModule("state", .{
         .root_source_file = b.path("src/state/state.zig"),

@@ -108,6 +108,95 @@ pub const U256 = struct {
 
         return result;
     }
+    
+    pub fn sub(self: U256, other: U256) U256 {
+        var result = U256.zero();
+        var borrow: u64 = 0;
+        
+        inline for (0..4) |i| {
+            const a = @as(u128, self.limbs[i]);
+            const b = @as(u128, other.limbs[i]) + borrow;
+            if (a >= b) {
+                result.limbs[i] = @truncate(a - b);
+                borrow = 0;
+            } else {
+                result.limbs[i] = @truncate((1 << 64) + a - b);
+                borrow = 1;
+            }
+        }
+        
+        return result;
+    }
+    
+    pub fn mul(self: U256, other: U256) U256 {
+        var result = U256.zero();
+        
+        for (0..4) |i| {
+            var carry: u64 = 0;
+            for (0..4) |j| {
+                if (i + j >= 4) break;
+                const product = @as(u128, self.limbs[i]) * @as(u128, other.limbs[j]) + 
+                               @as(u128, result.limbs[i + j]) + carry;
+                result.limbs[i + j] = @truncate(product);
+                carry = @intCast(product >> 64);
+            }
+        }
+        
+        return result;
+    }
+    
+    pub fn div(self: U256, other: U256) U256 {
+        if (other.isZero()) return U256.zero();
+        
+        // Simplified division for small values
+        if (other.limbs[1] == 0 and other.limbs[2] == 0 and other.limbs[3] == 0 and
+            self.limbs[1] == 0 and self.limbs[2] == 0 and self.limbs[3] == 0) {
+            return U256.fromU64(self.limbs[0] / other.limbs[0]);
+        }
+        
+        // For larger values, use long division (simplified)
+        // TODO: Implement proper Knuth division algorithm
+        return U256.zero();
+    }
+    
+    pub fn mod(self: U256, other: U256) U256 {
+        if (other.isZero()) return U256.zero();
+        
+        // Simplified modulo for small values
+        if (other.limbs[1] == 0 and other.limbs[2] == 0 and other.limbs[3] == 0 and
+            self.limbs[1] == 0 and self.limbs[2] == 0 and self.limbs[3] == 0) {
+            return U256.fromU64(self.limbs[0] % other.limbs[0]);
+        }
+        
+        return U256.zero();
+    }
+    
+    pub fn lt(self: U256, other: U256) bool {
+        var i: usize = 4;
+        while (i > 0) {
+            i -= 1;
+            if (self.limbs[i] < other.limbs[i]) return true;
+            if (self.limbs[i] > other.limbs[i]) return false;
+        }
+        return false;
+    }
+    
+    pub fn gt(self: U256, other: U256) bool {
+        var i: usize = 4;
+        while (i > 0) {
+            i -= 1;
+            if (self.limbs[i] > other.limbs[i]) return true;
+            if (self.limbs[i] < other.limbs[i]) return false;
+        }
+        return false;
+    }
+    
+    pub fn eq(self: U256, other: U256) bool {
+        return self.limbs[0] == other.limbs[0] and
+               self.limbs[1] == other.limbs[1] and
+               self.limbs[2] == other.limbs[2] and
+               self.limbs[3] == other.limbs[3];
+    }
 
     pub fn isZero(self: U256) bool {
         return self.limbs[0] == 0 and self.limbs[1] == 0 and 

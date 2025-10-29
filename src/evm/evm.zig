@@ -1,5 +1,39 @@
 const std = @import("std");
 const types = @import("types");
+const crypto = @import("crypto");
+
+/// Execution context for EVM
+pub const ExecutionContext = struct {
+    caller: types.Address,
+    origin: types.Address,
+    address: types.Address,
+    value: types.U256,
+    calldata: []const u8,
+    code: []const u8,
+    block_number: u64,
+    block_timestamp: u64,
+    block_coinbase: types.Address,
+    block_difficulty: types.U256,
+    block_gaslimit: u64,
+    chain_id: u64,
+    
+    pub fn default() ExecutionContext {
+        return ExecutionContext{
+            .caller = types.Address.zero,
+            .origin = types.Address.zero,
+            .address = types.Address.zero,
+            .value = types.U256.zero(),
+            .calldata = &[_]u8{},
+            .code = &[_]u8{},
+            .block_number = 0,
+            .block_timestamp = 0,
+            .block_coinbase = types.Address.zero,
+            .block_difficulty = types.U256.zero(),
+            .block_gaslimit = 0,
+            .chain_id = 1, // Mainnet
+        };
+    }
+};
 
 /// Ethereum Virtual Machine implementation
 pub const EVM = struct {
@@ -9,6 +43,8 @@ pub const EVM = struct {
     stack: Stack,
     memory: Memory,
     storage: Storage,
+    context: ExecutionContext,
+    logs: std.ArrayList(Log),
 
     pub fn init(allocator: std.mem.Allocator, gas_limit: u64) !EVM {
         return EVM{
@@ -18,6 +54,21 @@ pub const EVM = struct {
             .stack = try Stack.init(allocator),
             .memory = try Memory.init(allocator),
             .storage = Storage.init(allocator),
+            .context = ExecutionContext.default(),
+            .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
+        };
+    }
+    
+    pub fn initWithContext(allocator: std.mem.Allocator, gas_limit: u64, context: ExecutionContext) !EVM {
+        return EVM{
+            .allocator = allocator,
+            .gas_limit = gas_limit,
+            .gas_used = 0,
+            .stack = try Stack.init(allocator),
+            .memory = try Memory.init(allocator),
+            .storage = Storage.init(allocator),
+            .context = context,
+            .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
         };
     }
 
@@ -25,10 +76,12 @@ pub const EVM = struct {
         self.stack.deinit(self.allocator);
         self.memory.deinit(self.allocator);
         self.storage.deinit();
+        self.logs.deinit(self.allocator);
     }
 
     pub fn execute(self: *EVM, code: []const u8, data: []const u8) !ExecutionResult {
-        _ = data;
+        self.context.code = code;
+        self.context.calldata = data;
         var pc: usize = 0;
 
         while (pc < code.len) {
@@ -39,13 +92,24 @@ pub const EVM = struct {
             const opcode = @as(Opcode, @enumFromInt(code[pc]));
             pc += 1;
 
-            try self.executeOpcode(opcode, code, &pc);
+            self.executeOpcode(opcode, code, &pc) catch |err| {
+                if (err == error.Revert) {
+                    return ExecutionResult{
+                        .success = false,
+                        .gas_used = self.gas_used,
+                        .return_data = &[_]u8{},
+                        .logs = &[_]Log{},
+                    };
+                }
+                return err;
+            };
         }
 
         return ExecutionResult{
             .success = true,
             .gas_used = self.gas_used,
             .return_data = &[_]u8{},
+            .logs = try self.logs.toOwnedSlice(self.allocator),
         };
     }
 
@@ -162,8 +226,38 @@ pub const EVM = struct {
             .PC => try self.opPc(pc),
             .GAS => try self.opGas(),
             
+            // Environmental
+            .ADDRESS => try self.opAddress(),
+            .CALLER => try self.opCaller(),
+            .ORIGIN => try self.opOrigin(),
+            .CALLVALUE => try self.opCallValue(),
+            .CALLDATALOAD => try self.opCallDataLoad(),
+            .CALLDATASIZE => try self.opCallDataSize(),
+            .CODESIZE => try self.opCodeSize(),
+            .GASPRICE => try self.opGasPrice(),
+            
+            // Block information
+            .COINBASE => try self.opCoinbase(),
+            .TIMESTAMP => try self.opTimestamp(),
+            .NUMBER => try self.opNumber(),
+            .DIFFICULTY => try self.opDifficulty(),
+            .GASLIMIT => try self.opGasLimit(),
+            .CHAINID => try self.opChainId(),
+            .BASEFEE => try self.opBaseFee(),
+            
+            // Hashing
+            .SHA3 => try self.opSha3(),
+            
+            // Logging
+            .LOG0 => try self.opLog(0),
+            .LOG1 => try self.opLog(1),
+            .LOG2 => try self.opLog(2),
+            .LOG3 => try self.opLog(3),
+            .LOG4 => try self.opLog(4),
+            
             // System
             .RETURN => try self.opReturn(),
+            .REVERT => try self.opRevert(),
             
             else => return error.InvalidOpcode,
         }
@@ -179,38 +273,28 @@ pub const EVM = struct {
     fn opMul(self: *EVM) !void {
         const a = try self.stack.pop();
         const b = try self.stack.pop();
-        _ = b;
-        try self.stack.push(self.allocator, a); // Simplified
+        try self.stack.push(self.allocator, a.mul(b));
         self.gas_used += 5;
     }
 
     fn opSub(self: *EVM) !void {
         const a = try self.stack.pop();
         const b = try self.stack.pop();
-        _ = b;
-        try self.stack.push(self.allocator, a); // Simplified
+        try self.stack.push(self.allocator, a.sub(b));
         self.gas_used += 3;
     }
 
     fn opDiv(self: *EVM) !void {
         const a = try self.stack.pop();
         const b = try self.stack.pop();
-        if (b.isZero()) {
-            try self.stack.push(self.allocator, types.U256.zero());
-        } else {
-            try self.stack.push(self.allocator, a); // TODO: Implement proper division
-        }
+        try self.stack.push(self.allocator, a.div(b));
         self.gas_used += 5;
     }
     
     fn opMod(self: *EVM) !void {
-        _ = try self.stack.pop(); // a
+        const a = try self.stack.pop();
         const b = try self.stack.pop();
-        if (b.isZero()) {
-            try self.stack.push(self.allocator, types.U256.zero());
-        } else {
-            try self.stack.push(self.allocator, types.U256.zero()); // TODO: Implement modulo
-        }
+        try self.stack.push(self.allocator, a.mod(b));
         self.gas_used += 5;
     }
     
@@ -226,7 +310,7 @@ pub const EVM = struct {
     fn opLt(self: *EVM) !void {
         const a = try self.stack.pop();
         const b = try self.stack.pop();
-        const result = if (a.limbs[0] < b.limbs[0]) types.U256.one() else types.U256.zero();
+        const result = if (a.lt(b)) types.U256.one() else types.U256.zero();
         try self.stack.push(self.allocator, result);
         self.gas_used += 3;
     }
@@ -234,7 +318,7 @@ pub const EVM = struct {
     fn opGt(self: *EVM) !void {
         const a = try self.stack.pop();
         const b = try self.stack.pop();
-        const result = if (a.limbs[0] > b.limbs[0]) types.U256.one() else types.U256.zero();
+        const result = if (a.gt(b)) types.U256.one() else types.U256.zero();
         try self.stack.push(self.allocator, result);
         self.gas_used += 3;
     }
@@ -242,9 +326,7 @@ pub const EVM = struct {
     fn opEq(self: *EVM) !void {
         const a = try self.stack.pop();
         const b = try self.stack.pop();
-        const result = if (a.limbs[0] == b.limbs[0] and a.limbs[1] == b.limbs[1] and 
-                           a.limbs[2] == b.limbs[2] and a.limbs[3] == b.limbs[3])
-            types.U256.one() else types.U256.zero();
+        const result = if (a.eq(b)) types.U256.one() else types.U256.zero();
         try self.stack.push(self.allocator, result);
         self.gas_used += 3;
     }
@@ -356,6 +438,181 @@ pub const EVM = struct {
         const remaining = types.U256.fromU64(self.gas_limit - self.gas_used);
         try self.stack.push(self.allocator, remaining);
         self.gas_used += 2;
+    }
+    
+    // Environmental opcodes
+    fn opAddress(self: *EVM) !void {
+        var value = types.U256.zero();
+        // Address is 20 bytes, store in last 20 bytes of U256
+        for (self.context.address.bytes, 0..) |byte, i| {
+            if (i < 20) value.limbs[0] |= @as(u64, byte) << @intCast((19 - i) * 8);
+        }
+        try self.stack.push(self.allocator, value);
+        self.gas_used += 2;
+    }
+    
+    fn opCaller(self: *EVM) !void {
+        var value = types.U256.zero();
+        for (self.context.caller.bytes, 0..) |byte, i| {
+            if (i < 20) value.limbs[0] |= @as(u64, byte) << @intCast((19 - i) * 8);
+        }
+        try self.stack.push(self.allocator, value);
+        self.gas_used += 2;
+    }
+    
+    fn opOrigin(self: *EVM) !void {
+        var value = types.U256.zero();
+        for (self.context.origin.bytes, 0..) |byte, i| {
+            if (i < 20) value.limbs[0] |= @as(u64, byte) << @intCast((19 - i) * 8);
+        }
+        try self.stack.push(self.allocator, value);
+        self.gas_used += 2;
+    }
+    
+    fn opCallValue(self: *EVM) !void {
+        try self.stack.push(self.allocator, self.context.value);
+        self.gas_used += 2;
+    }
+    
+    fn opCallDataLoad(self: *EVM) !void {
+        const offset_u256 = try self.stack.pop();
+        const offset = offset_u256.limbs[0];
+        
+        var value = types.U256.zero();
+        if (offset < self.context.calldata.len) {
+            const end = @min(offset + 32, self.context.calldata.len);
+            const copy_len = end - offset;
+            var bytes = value.toBytes();
+            @memcpy(bytes[0..copy_len], self.context.calldata[offset..end]);
+            value = types.U256.fromBytes(bytes);
+        }
+        
+        try self.stack.push(self.allocator, value);
+        self.gas_used += 3;
+    }
+    
+    fn opCallDataSize(self: *EVM) !void {
+        const size = types.U256.fromU64(self.context.calldata.len);
+        try self.stack.push(self.allocator, size);
+        self.gas_used += 2;
+    }
+    
+    fn opCodeSize(self: *EVM) !void {
+        const size = types.U256.fromU64(self.context.code.len);
+        try self.stack.push(self.allocator, size);
+        self.gas_used += 2;
+    }
+    
+    fn opGasPrice(self: *EVM) !void {
+        // Fixed gas price for now
+        const price = types.U256.fromU64(20000000000); // 20 gwei
+        try self.stack.push(self.allocator, price);
+        self.gas_used += 2;
+    }
+    
+    // Block information opcodes
+    fn opCoinbase(self: *EVM) !void {
+        var value = types.U256.zero();
+        for (self.context.block_coinbase.bytes, 0..) |byte, i| {
+            if (i < 20) value.limbs[0] |= @as(u64, byte) << @intCast((19 - i) * 8);
+        }
+        try self.stack.push(self.allocator, value);
+        self.gas_used += 2;
+    }
+    
+    fn opTimestamp(self: *EVM) !void {
+        const timestamp = types.U256.fromU64(self.context.block_timestamp);
+        try self.stack.push(self.allocator, timestamp);
+        self.gas_used += 2;
+    }
+    
+    fn opNumber(self: *EVM) !void {
+        const number = types.U256.fromU64(self.context.block_number);
+        try self.stack.push(self.allocator, number);
+        self.gas_used += 2;
+    }
+    
+    fn opDifficulty(self: *EVM) !void {
+        try self.stack.push(self.allocator, self.context.block_difficulty);
+        self.gas_used += 2;
+    }
+    
+    fn opGasLimit(self: *EVM) !void {
+        const gaslimit = types.U256.fromU64(self.context.block_gaslimit);
+        try self.stack.push(self.allocator, gaslimit);
+        self.gas_used += 2;
+    }
+    
+    fn opChainId(self: *EVM) !void {
+        const chain_id = types.U256.fromU64(self.context.chain_id);
+        try self.stack.push(self.allocator, chain_id);
+        self.gas_used += 2;
+    }
+    
+    fn opBaseFee(self: *EVM) !void {
+        // EIP-1559 base fee - simplified for now
+        const base_fee = types.U256.fromU64(1000000000); // 1 gwei
+        try self.stack.push(self.allocator, base_fee);
+        self.gas_used += 2;
+    }
+    
+    // SHA3 opcode
+    fn opSha3(self: *EVM) !void {
+        const offset = try self.stack.pop();
+        const length = try self.stack.pop();
+        
+        const off = offset.limbs[0];
+        const len = length.limbs[0];
+        
+        if (off + len > self.memory.data.items.len) {
+            try self.memory.data.resize(self.allocator, off + len);
+        }
+        
+        const data = self.memory.data.items[off..off + len];
+        var hash: [32]u8 = undefined;
+        crypto.keccak256(data, &hash);
+        
+        const result = types.U256.fromBytes(hash);
+        try self.stack.push(self.allocator, result);
+        self.gas_used += 30 + 6 * ((len + 31) / 32);
+    }
+    
+    // LOG opcodes
+    fn opLog(self: *EVM, topic_count: usize) !void {
+        const offset = try self.stack.pop();
+        const length = try self.stack.pop();
+        
+        var topics = try self.allocator.alloc(types.Hash, topic_count);
+        for (0..topic_count) |i| {
+            const topic_u256 = try self.stack.pop();
+            topics[i] = types.Hash{ .bytes = topic_u256.toBytes() };
+        }
+        
+        const off = offset.limbs[0];
+        const len = length.limbs[0];
+        
+        if (off + len > self.memory.data.items.len) {
+            try self.memory.data.resize(self.allocator, off + len);
+        }
+        
+        const data = try self.allocator.alloc(u8, len);
+        @memcpy(data, self.memory.data.items[off..off + len]);
+        
+        try self.logs.append(self.allocator, Log{
+            .address = self.context.address,
+            .topics = topics,
+            .data = data,
+        });
+        
+        self.gas_used += 375 + 375 * topic_count + 8 * len;
+    }
+    
+    // REVERT opcode
+    fn opRevert(self: *EVM) !void {
+        _ = try self.stack.pop(); // offset
+        _ = try self.stack.pop(); // length
+        self.gas_used += 0;
+        return error.Revert;
     }
 
     fn opPush(self: *EVM, code: []const u8, pc: *usize, n: usize) !void {
@@ -687,6 +944,13 @@ pub const ExecutionResult = struct {
     success: bool,
     gas_used: u64,
     return_data: []const u8,
+    logs: []const Log,
+};
+
+pub const Log = struct {
+    address: types.Address,
+    topics: []types.Hash,
+    data: []const u8,
 };
 
 test "EVM stack operations" {
