@@ -113,7 +113,7 @@ pub fn encodeList(items: []const []const u8, allocator: std.mem.Allocator) ![]u8
     }
 }
 
-/// Decode RLP-encoded data
+/// Decode RLP-encoded data with strict validation
 pub const Decoded = union(enum) {
     bytes: []const u8,
     list: []const Decoded,
@@ -125,43 +125,87 @@ pub fn decode(data: []const u8, allocator: std.mem.Allocator) (RlpError || std.m
     const prefix = data[0];
     
     if (prefix < 0x80) {
-        // Single byte
+        // Single byte - must be the value itself
         return Decoded{ .bytes = data[0..1] };
     } else if (prefix <= 0xb7) {
-        // Short string
+        // Short string: 0-55 bytes
         const len = prefix - 0x80;
         if (data.len < 1 + len) return error.UnexpectedEnd;
+        
+        // Strict validation: single byte values must not be encoded this way
+        if (len == 1 and data[1] < 0x80) {
+            return error.InvalidEncoding; // Should be encoded as single byte
+        }
+        
         return Decoded{ .bytes = data[1 .. 1 + len] };
     } else if (prefix <= 0xbf) {
-        // Long string
+        // Long string: 56+ bytes
         const len_bytes = prefix - 0xb7;
+        if (len_bytes == 0) return error.InvalidLength;
         if (data.len < 1 + len_bytes) return error.UnexpectedEnd;
+        
+        // Strict validation: no leading zeros in length
+        if (len_bytes > 1 and data[1] == 0) {
+            return error.InvalidEncoding; // Leading zero in length
+        }
         
         var len: usize = 0;
         for (1..1 + len_bytes) |i| {
             len = (len << 8) | data[i];
         }
         
-        if (data.len < 1 + len_bytes + len) return error.UnexpectedEnd;
-        return Decoded{ .bytes = data[1 + len_bytes .. 1 + len_bytes + len] };
+        // Strict validation: must actually need long form
+        if (len < 56) {
+            return error.InvalidEncoding; // Should use short form
+        }
+        
+        // Check for overflow before adding
+        const header_size: usize = 1 + len_bytes;
+        const max_payload = std.math.maxInt(usize) - header_size;
+        if (len > max_payload) {
+            return error.InvalidLength; // Would overflow
+        }
+        const total_size = header_size + len;
+        
+        if (data.len < total_size) return error.UnexpectedEnd;
+        return Decoded{ .bytes = data[header_size..total_size] };
     } else if (prefix <= 0xf7) {
-        // Short list
+        // Short list: 0-55 bytes total
         const len = prefix - 0xc0;
         if (data.len < 1 + len) return error.UnexpectedEnd;
         
         return try decodeList(data[1 .. 1 + len], allocator);
     } else {
-        // Long list
+        // Long list: 56+ bytes total
         const len_bytes = prefix - 0xf7;
+        if (len_bytes == 0) return error.InvalidLength;
         if (data.len < 1 + len_bytes) return error.UnexpectedEnd;
+        
+        // Strict validation: no leading zeros in length
+        if (len_bytes > 1 and data[1] == 0) {
+            return error.InvalidEncoding; // Leading zero in length
+        }
         
         var len: usize = 0;
         for (1..1 + len_bytes) |i| {
             len = (len << 8) | data[i];
         }
         
-        if (data.len < 1 + len_bytes + len) return error.UnexpectedEnd;
-        return try decodeList(data[1 + len_bytes .. 1 + len_bytes + len], allocator);
+        // Strict validation: must actually need long form  
+        if (len < 56) {
+            return error.InvalidEncoding; // Should use short form
+        }
+        
+        // Check for overflow before adding
+        const header_size: usize = 1 + len_bytes;
+        const max_payload = std.math.maxInt(usize) - header_size;
+        if (len > max_payload) {
+            return error.InvalidLength; // Would overflow
+        }
+        const total_size = header_size + len;
+        
+        if (data.len < total_size) return error.UnexpectedEnd;
+        return try decodeList(data[header_size..total_size], allocator);
     }
 }
 
