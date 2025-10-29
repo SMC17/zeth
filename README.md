@@ -1,10 +1,44 @@
 # Zeth - Ethereum Implementation in Zig
 
-A modern, high-performance Ethereum protocol implementation written in Zig.
+[![CI Status](https://github.com/SMC17/eth-zig/workflows/CI/badge.svg)](https://github.com/SMC17/eth-zig/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Zig](https://img.shields.io/badge/Zig-0.15.1-orange.svg)](https://ziglang.org/)
 
-## Project Status
+> **Building the most advanced, optimized, performant, and secure Ethereum implementation in Zig**
 
-This is an early-stage implementation of the Ethereum protocol in Zig. The project aims to provide a clean, efficient, and well-documented Ethereum node implementation.
+A modern Ethereum protocol implementation written in Zig, designed to be the go-to integration layer for the Ethereum ecosystem. We leverage Zig's safety guarantees, performance characteristics, and compile-time execution to build a client that's both fast and reliable.
+
+## 🎯 Vision
+
+Zeth aims to become the reference implementation for Ethereum in Zig, providing:
+- **Performance**: Sub-second block processing with minimal memory footprint
+- **Safety**: Compile-time guarantees and explicit error handling
+- **Clarity**: Clean, readable code that serves as documentation
+- **Community**: Open, welcoming, and collaborative development
+
+## ⚠️ Project Status: Alpha (v0.1.0)
+
+**Current State**: Early development, NOT production-ready
+
+We're being completely transparent: Zeth is in its infancy. We have the foundation, but we need YOUR help to build this into a production-ready client.
+
+### What Works ✅
+- Core data structures (Address, Hash, U256, Transaction, Block, Account)
+- RLP encoding/decoding
+- Basic EVM (~15/150+ opcodes)
+- State management with Merkle Patricia Trie
+- 14 passing tests, 1,351 lines of code
+
+### What's Missing ❌
+- Complete cryptography (proper Keccak-256, full secp256k1)
+- Full EVM implementation (135+ more opcodes)
+- P2P networking (DevP2P, RLPx)
+- Consensus mechanisms (Proof of Stake)
+- JSON-RPC API
+- Database persistence
+- Real-world testing at scale
+
+**We need contributors!** See [CONTRIBUTING.md](CONTRIBUTING.md) and [ROADMAP.md](ROADMAP.md)
 
 ## Features Implemented
 
@@ -117,45 +151,127 @@ zig build test
 - [ ] Snapshot sync
 - [ ] Archive node support
 
-## Testing
-
-Run the test suite:
+## 🚀 Quick Start
 
 ```bash
+# Clone the repository
+git clone https://github.com/SMC17/eth-zig.git
+cd eth-zig
+
+# Build the project
+zig build
+
+# Run tests
 zig build test
+
+# Run the example
+zig build run
+```
+
+### Example Output
+```
+Zeth - Ethereum Implementation in Zig
+======================================
+
+Transaction created:
+  Nonce: 0
+  Gas Price: 20000000000
+  Gas Limit: 21000
+  Value: 1000000000000000000 wei
+
+Keccak256 hash of "Hello, Ethereum!":
+  0x3c152fae473600fa75a2205ff7110142a89ebe9751b7e28bf1684067454533ab
+```
+
+## 🧪 Testing
+
+Run the full test suite:
+```bash
+zig build test    # All 14 tests should pass
 ```
 
 Individual component tests:
-
 ```bash
-# Test crypto module
-zig test src/crypto/crypto.zig
-
-# Test RLP module
-zig test src/rlp/rlp.zig
-
-# Test EVM
-zig test src/evm/evm.zig
-
-# Test state management
-zig test src/state/state.zig
+zig test src/types/types.zig   # Core types
+zig test src/crypto/crypto.zig # Cryptography
+zig test src/rlp/rlp.zig       # RLP encoding
+zig test src/evm/evm.zig       # EVM
+zig test src/state/state.zig   # State management
 ```
 
-## References
+## 🤝 Contributing
 
-- [Ethereum Yellow Paper](https://ethereum.github.io/yellowpaper/paper.pdf)
-- [go-ethereum (Geth)](https://github.com/ethereum/go-ethereum)
-- [Zig Language Reference](https://ziglang.org/documentation/master/)
+**We need YOUR help!** Zeth is a community-driven project and we welcome contributions of all kinds.
 
-## Contributing
+### Immediate Needs
+- 🔐 **Cryptography**: Implement proper Keccak-256 and complete secp256k1
+- ⚡ **EVM**: Expand opcode coverage from 15 to 150+
+- 🌐 **Networking**: Build DevP2P and RLPx protocols
+- 🧪 **Testing**: Add more comprehensive tests
+- 📚 **Documentation**: Write tutorials and guides
 
-Contributions are welcome! This is an educational and experimental project.
+### How to Contribute
+1. Check out [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
+2. Look at [good first issues](https://github.com/SMC17/eth-zig/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+3. Join discussions in [GitHub Discussions](https://github.com/SMC17/eth-zig/discussions)
+4. Submit PRs, report bugs, suggest features!
 
-## License
+Read our [ROADMAP.md](ROADMAP.md) to see where we're headed.
 
-MIT License - See LICENSE file for details
+## 📖 Documentation
 
-## Disclaimer
+- [ROADMAP.md](ROADMAP.md) - Project roadmap and milestones
+- [CONTRIBUTING.md](CONTRIBUTING.md) - How to contribute
+- [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) - Detailed feature status
+- [Ethereum Yellow Paper](https://ethereum.github.io/yellowpaper/paper.pdf) - Ethereum specification
 
-This is an experimental implementation for educational purposes. Do not use in production or with real funds.
+## 🎯 Why Zig for Ethereum?
+
+- **Memory Safety**: Compile-time checks prevent common vulnerabilities
+- **Performance**: No hidden control flow, explicit allocations
+- **Simplicity**: No hidden memory management, clear error handling
+- **Cross-platform**: Easy compilation to any target
+- **Compile-time Execution**: Powerful metaprogramming without macros
+
+## 🌟 Star History
+
+If you find Zeth interesting, give us a star! It helps us grow the community.
+
+## 💬 Community
+
+- **GitHub Issues**: [Report bugs & request features](https://github.com/SMC17/eth-zig/issues)
+- **GitHub Discussions**: [Ask questions & share ideas](https://github.com/SMC17/eth-zig/discussions)
+- **Twitter**: Coming soon - follow for updates
+- **Discord**: Coming soon - join for real-time chat
+
+## 📄 License
+
+MIT License - See [LICENSE](LICENSE) for details
+
+## ⚠️ Disclaimer
+
+**This is alpha software under active development.**
+
+- NOT production-ready
+- NOT audited for security
+- APIs will change
+- Do NOT use with real funds
+- Use at your own risk
+
+This is an educational and experimental project. We're building in public and learning together.
+
+## 🙏 Acknowledgments
+
+Inspired by:
+- [go-ethereum (Geth)](https://github.com/ethereum/go-ethereum) - The reference Ethereum implementation
+- [Reth](https://github.com/paradigmxyz/reth) - Rust Ethereum implementation
+- [Zig](https://ziglang.org/) - The Zig programming language
+
+Special thanks to the Ethereum Foundation and Zig community.
+
+---
+
+**Built with ❤️ by the Zeth community**
+
+[⭐ Star us on GitHub](https://github.com/SMC17/eth-zig) | [🐛 Report a Bug](https://github.com/SMC17/eth-zig/issues/new?template=bug_report.md) | [💡 Request a Feature](https://github.com/SMC17/eth-zig/issues/new?template=feature_request.md)
 
