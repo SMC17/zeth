@@ -168,6 +168,24 @@ pub fn build(b: *std.Build) void {
     const bench_run = b.addRunArtifact(bench_exe);
     const bench_step = b.step("bench", "Run performance benchmarks");
     bench_step.dependOn(&bench_run.step);
+    
+    // Validation against Ethereum tests
+    const rlp_validator_mod = b.createModule(.{
+        .root_source_file = b.path("validation/rlp_validator.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    rlp_validator_mod.addImport("rlp", rlp_mod);
+    
+    const rlp_validator_exe = b.addExecutable(.{
+        .name = "rlp_validator",
+        .root_module = rlp_validator_mod,
+    });
+    b.installArtifact(rlp_validator_exe);
+    
+    const rlp_validator_run = b.addRunArtifact(rlp_validator_exe);
+    const validate_rlp_step = b.step("validate-rlp", "Validate RLP against Ethereum test vectors");
+    validate_rlp_step.dependOn(&rlp_validator_run.step);
 
     // Tests
     const test_step = b.step("test", "Run unit tests");
