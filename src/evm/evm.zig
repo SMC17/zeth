@@ -258,6 +258,12 @@ pub const EVM = struct {
             // System
             .RETURN => try self.opReturn(),
             .REVERT => try self.opRevert(),
+            .CALL => try self.opCall(),
+            .STATICCALL => try self.opStaticCall(),
+            .DELEGATECALL => try self.opDelegateCall(),
+            .CREATE => try self.opCreate(),
+            .CREATE2 => try self.opCreate2(),
+            .SELFDESTRUCT => try self.opSelfDestruct(),
             
             else => return error.InvalidOpcode,
         }
@@ -278,23 +284,23 @@ pub const EVM = struct {
     }
 
     fn opSub(self: *EVM) !void {
-        const a = try self.stack.pop();
-        const b = try self.stack.pop();
-        try self.stack.push(self.allocator, a.sub(b));
+        const a = try self.stack.pop(); // top of stack
+        const b = try self.stack.pop(); // second
+        try self.stack.push(self.allocator, b.sub(a)); // b - a (reversed!)
         self.gas_used += 3;
     }
 
     fn opDiv(self: *EVM) !void {
-        const a = try self.stack.pop();
-        const b = try self.stack.pop();
-        try self.stack.push(self.allocator, a.div(b));
+        const a = try self.stack.pop(); // top
+        const b = try self.stack.pop(); // second
+        try self.stack.push(self.allocator, b.div(a)); // b / a (reversed!)
         self.gas_used += 5;
     }
     
     fn opMod(self: *EVM) !void {
-        const a = try self.stack.pop();
-        const b = try self.stack.pop();
-        try self.stack.push(self.allocator, a.mod(b));
+        const a = try self.stack.pop(); // top
+        const b = try self.stack.pop(); // second
+        try self.stack.push(self.allocator, b.mod(a)); // b % a (reversed!)
         self.gas_used += 5;
     }
     
@@ -308,17 +314,17 @@ pub const EVM = struct {
     
     // Comparison opcodes
     fn opLt(self: *EVM) !void {
-        const a = try self.stack.pop();
-        const b = try self.stack.pop();
-        const result = if (a.lt(b)) types.U256.one() else types.U256.zero();
+        const a = try self.stack.pop(); // top
+        const b = try self.stack.pop(); // second
+        const result = if (b.lt(a)) types.U256.one() else types.U256.zero(); // b < a
         try self.stack.push(self.allocator, result);
         self.gas_used += 3;
     }
     
     fn opGt(self: *EVM) !void {
-        const a = try self.stack.pop();
-        const b = try self.stack.pop();
-        const result = if (a.gt(b)) types.U256.one() else types.U256.zero();
+        const a = try self.stack.pop(); // top
+        const b = try self.stack.pop(); // second
+        const result = if (b.gt(a)) types.U256.one() else types.U256.zero(); // b > a
         try self.stack.push(self.allocator, result);
         self.gas_used += 3;
     }
@@ -614,6 +620,115 @@ pub const EVM = struct {
         self.gas_used += 0;
         return error.Revert;
     }
+    
+    // CALL opcodes - simplified implementations
+    fn opCall(self: *EVM) !void {
+        const gas = try self.stack.pop();
+        const address_u256 = try self.stack.pop();
+        const value = try self.stack.pop();
+        const args_offset = try self.stack.pop();
+        const args_length = try self.stack.pop();
+        const ret_offset = try self.stack.pop();
+        const ret_length = try self.stack.pop();
+        
+        // Simplified CALL - just push success for now
+        // TODO: Actually execute called contract code
+        _ = gas;
+        _ = address_u256;
+        _ = value;
+        _ = args_offset;
+        _ = args_length;
+        _ = ret_offset;
+        _ = ret_length;
+        
+        try self.stack.push(self.allocator, types.U256.one()); // Success
+        self.gas_used += 700;
+    }
+    
+    fn opStaticCall(self: *EVM) !void {
+        const gas = try self.stack.pop();
+        const address = try self.stack.pop();
+        const args_offset = try self.stack.pop();
+        const args_length = try self.stack.pop();
+        const ret_offset = try self.stack.pop();
+        const ret_length = try self.stack.pop();
+        
+        // Simplified STATICCALL
+        _ = gas;
+        _ = address;
+        _ = args_offset;
+        _ = args_length;
+        _ = ret_offset;
+        _ = ret_length;
+        
+        try self.stack.push(self.allocator, types.U256.one()); // Success
+        self.gas_used += 700;
+    }
+    
+    fn opDelegateCall(self: *EVM) !void {
+        const gas = try self.stack.pop();
+        const address = try self.stack.pop();
+        const args_offset = try self.stack.pop();
+        const args_length = try self.stack.pop();
+        const ret_offset = try self.stack.pop();
+        const ret_length = try self.stack.pop();
+        
+        // Simplified DELEGATECALL
+        _ = gas;
+        _ = address;
+        _ = args_offset;
+        _ = args_length;
+        _ = ret_offset;
+        _ = ret_length;
+        
+        try self.stack.push(self.allocator, types.U256.one()); // Success
+        self.gas_used += 700;
+    }
+    
+    // CREATE opcodes
+    fn opCreate(self: *EVM) !void {
+        const value = try self.stack.pop();
+        const offset = try self.stack.pop();
+        const length = try self.stack.pop();
+        
+        // Simplified CREATE - return mock address
+        _ = value;
+        _ = offset;
+        _ = length;
+        
+        // Return a mock contract address
+        const mock_address = types.U256.fromU64(0x1234567890);
+        try self.stack.push(self.allocator, mock_address);
+        self.gas_used += 32000;
+    }
+    
+    fn opCreate2(self: *EVM) !void {
+        const value = try self.stack.pop();
+        const offset = try self.stack.pop();
+        const length = try self.stack.pop();
+        const salt = try self.stack.pop();
+        
+        // Simplified CREATE2
+        _ = value;
+        _ = offset;
+        _ = length;
+        _ = salt;
+        
+        // Return a mock contract address
+        const mock_address = types.U256.fromU64(0x9876543210);
+        try self.stack.push(self.allocator, mock_address);
+        self.gas_used += 32000;
+    }
+    
+    // SELFDESTRUCT opcode
+    fn opSelfDestruct(self: *EVM) !void {
+        const beneficiary = try self.stack.pop();
+        _ = beneficiary;
+        
+        // Mark for deletion - in real implementation would transfer balance
+        self.gas_used += 5000;
+        return error.SelfDestruct;
+    }
 
     fn opPush(self: *EVM, code: []const u8, pc: *usize, n: usize) !void {
         var value = types.U256.zero();
@@ -868,14 +983,14 @@ const Stack = struct {
         self.items.deinit(allocator);
     }
 
-    fn push(self: *Stack, allocator: std.mem.Allocator, value: types.U256) !void {
+    pub fn push(self: *Stack, allocator: std.mem.Allocator, value: types.U256) !void {
         if (self.items.items.len >= max_depth) {
             return error.StackOverflow;
         }
         try self.items.append(allocator, value);
     }
 
-    fn pop(self: *Stack) !types.U256 {
+    pub fn pop(self: *Stack) !types.U256 {
         if (self.items.items.len == 0) {
             return error.StackUnderflow;
         }
@@ -931,11 +1046,11 @@ const Storage = struct {
         self.data.deinit();
     }
 
-    fn load(self: *Storage, key: types.U256) !types.U256 {
+    pub fn load(self: *Storage, key: types.U256) !types.U256 {
         return self.data.get(key) orelse types.U256.zero();
     }
 
-    fn store(self: *Storage, key: types.U256, value: types.U256) !void {
+    pub fn store(self: *Storage, key: types.U256, value: types.U256) !void {
         try self.data.put(key, value);
     }
 };

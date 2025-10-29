@@ -111,17 +111,19 @@ pub const U256 = struct {
     
     pub fn sub(self: U256, other: U256) U256 {
         var result = U256.zero();
-        var borrow: u64 = 0;
+        var borrow: i128 = 0;
         
         inline for (0..4) |i| {
-            const a = @as(u128, self.limbs[i]);
-            const b = @as(u128, other.limbs[i]) + borrow;
-            if (a >= b) {
-                result.limbs[i] = @truncate(a - b);
-                borrow = 0;
-            } else {
-                result.limbs[i] = @truncate((1 << 64) + a - b);
+            const a = @as(i128, self.limbs[i]);
+            const b = @as(i128, other.limbs[i]);
+            const diff = a - b - borrow;
+            
+            if (diff < 0) {
+                result.limbs[i] = @intCast(@as(u128, @bitCast(diff + (1 << 64))) & 0xFFFFFFFFFFFFFFFF);
                 borrow = 1;
+            } else {
+                result.limbs[i] = @intCast(diff);
+                borrow = 0;
             }
         }
         

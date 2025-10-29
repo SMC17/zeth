@@ -69,6 +69,86 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the Ethereum node");
     run_step.dependOn(&run_cmd.step);
 
+    // Examples
+    const counter_mod = b.createModule(.{
+        .root_source_file = b.path("examples/counter.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    counter_mod.addImport("types", types_mod);
+    counter_mod.addImport("crypto", crypto_mod);
+    counter_mod.addImport("evm", evm_mod);
+    
+    const counter_exe = b.addExecutable(.{
+        .name = "counter",
+        .root_module = counter_mod,
+    });
+    b.installArtifact(counter_exe);
+    
+    const counter_run = b.addRunArtifact(counter_exe);
+    const counter_step = b.step("run-counter", "Run the counter example");
+    counter_step.dependOn(&counter_run.step);
+    
+    // Storage example
+    const storage_mod = b.createModule(.{
+        .root_source_file = b.path("examples/storage.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    storage_mod.addImport("types", types_mod);
+    storage_mod.addImport("crypto", crypto_mod);
+    storage_mod.addImport("evm", evm_mod);
+    
+    const storage_exe = b.addExecutable(.{
+        .name = "storage",
+        .root_module = storage_mod,
+    });
+    b.installArtifact(storage_exe);
+    
+    const storage_run = b.addRunArtifact(storage_exe);
+    const storage_step = b.step("run-storage", "Run the storage example");
+    storage_step.dependOn(&storage_run.step);
+    
+    // Arithmetic example
+    const arithmetic_mod = b.createModule(.{
+        .root_source_file = b.path("examples/arithmetic.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    arithmetic_mod.addImport("types", types_mod);
+    arithmetic_mod.addImport("crypto", crypto_mod);
+    arithmetic_mod.addImport("evm", evm_mod);
+    
+    const arithmetic_exe = b.addExecutable(.{
+        .name = "arithmetic",
+        .root_module = arithmetic_mod,
+    });
+    b.installArtifact(arithmetic_exe);
+    
+    const arithmetic_run = b.addRunArtifact(arithmetic_exe);
+    const arithmetic_step = b.step("run-arithmetic", "Run the arithmetic example");
+    arithmetic_step.dependOn(&arithmetic_run.step);
+    
+    // Events example
+    const events_mod = b.createModule(.{
+        .root_source_file = b.path("examples/events.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    events_mod.addImport("types", types_mod);
+    events_mod.addImport("crypto", crypto_mod);
+    events_mod.addImport("evm", evm_mod);
+    
+    const events_exe = b.addExecutable(.{
+        .name = "events",
+        .root_module = events_mod,
+    });
+    b.installArtifact(events_exe);
+    
+    const events_run = b.addRunArtifact(events_exe);
+    const events_step = b.step("run-events", "Run the events example");
+    events_step.dependOn(&events_run.step);
+
     // Tests
     const test_step = b.step("test", "Run unit tests");
 
@@ -124,4 +204,20 @@ pub fn build(b: *std.Build) void {
     });
     const run_state_tests = b.addRunArtifact(state_tests);
     test_step.dependOn(&run_state_tests.step);
+    
+    // Comprehensive EVM tests
+    const comprehensive_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/evm/comprehensive_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    comprehensive_test_mod.addImport("evm", evm_mod);
+    comprehensive_test_mod.addImport("types", types_mod);
+    comprehensive_test_mod.addImport("crypto", crypto_mod);
+    
+    const comprehensive_tests = b.addTest(.{
+        .root_module = comprehensive_test_mod,
+    });
+    const run_comprehensive_tests = b.addRunArtifact(comprehensive_tests);
+    test_step.dependOn(&run_comprehensive_tests.step);
 }
