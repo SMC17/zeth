@@ -1,303 +1,202 @@
 # Zeth - Ethereum Implementation in Zig
 
-[![CI Status](https://github.com/SMC17/eth-zig/workflows/CI/badge.svg)](https://github.com/SMC17/eth-zig/actions)
+[![CI Status](https://github.com/SMC17/zeth/workflows/CI/badge.svg)](https://github.com/SMC17/zeth/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Zig](https://img.shields.io/badge/Zig-0.15.1-orange.svg)](https://ziglang.org/)
+[![RLP Validated](https://img.shields.io/badge/RLP-98.8%25%20Ethereum%20Validated-green)](https://github.com/SMC17/zeth)
 
-> **Building the most advanced, optimized, performant, and secure Ethereum implementation in Zig**
+> **Building a validated, production-grade Ethereum implementation in Zig**
 
-A modern Ethereum protocol implementation written in Zig, designed to be the go-to integration layer for the Ethereum ecosystem. We leverage Zig's safety guarantees, performance characteristics, and compile-time execution to build a client that's both fast and reliable.
+---
 
-## 🎯 Vision
+## ⚠️ Status: VALIDATION IN PROGRESS - NOT READY FOR LAUNCH
 
-Zeth aims to become the reference implementation for Ethereum in Zig, providing:
-- **Performance**: Sub-second block processing with minimal memory footprint
-- **Safety**: Compile-time guarantees and explicit error handling
-- **Clarity**: Clean, readable code that serves as documentation
-- **Community**: Open, welcoming, and collaborative development
+**Current Phase**: Week 1 Complete, Week 2 In Progress
 
-## ⚠️ Project Status: Alpha (v0.2.0) - VALIDATION IN PROGRESS
+**Validation Against Ethereum**:
+- ✅ **RLP: 98.8% validated** (82/83 official Ethereum tests passing)
+- ⏳ **EVM Opcodes**: Manual verification in progress
+- ⏳ **Gas Costs**: Yellow Paper verification pending
+- ⏳ **Real Contracts**: Testing pending
 
-**Current State**: Implementation complete, Ethereum validation in progress
+**We validate systematically. We launch with proof. Timeline: 5-6 weeks.**
 
-**CRITICAL**: We're in **validation mode**. We built a comprehensive EVM implementation (3,488 LOC, 80+ opcodes, 66 tests passing). Now we're validating against ACTUAL Ethereum test vectors. **We will NOT launch until validated.**
+---
 
-**Validation Results So Far**:
-- ✅ RLP Encoding: **89.3% pass** against Ethereum tests (25/28)
-- ⚠️ VM Opcodes: Not yet tested against Ethereum
-- ⚠️ Gas Costs: Not yet verified
-- ⚠️ Real Contracts: Not yet attempted
+## ✅ What's ACTUALLY Validated (Ethereum Ground Truth)
 
-**We're building in public with radical honesty. Found bugs? Good. We'll fix them.**
+### RLP Implementation: **98.8%** Ethereum Validated
+- **Encoding**: 28/28 tests (100%)
+- **Decoding**: 28/28 tests (100%)
+- **Security**: 25/26 tests (96.2%)
+- **Bugs Found & Fixed**: 5 critical issues
 
-### What Works ✅
-- Core data structures (Address, Hash, U256, Transaction, Block, Account)
-- RLP encoding/decoding (complete with tests)
-- **EVM with 80+ implemented opcodes - 70% coverage!**
-  - ✅ **ALL stack operations** (PUSH1-32, DUP1-16, SWAP1-16) - 100%
-  - ✅ **Arithmetic** (ADD, SUB, MUL, DIV, MOD, EXP) - Working!
-  - ✅ **Comparison** (LT, GT, EQ, ISZERO) - Working!
-  - ✅ **Bitwise** (AND, OR, XOR, NOT, SHL, SHR) - Working!
-  - ✅ **Memory** (MLOAD, MSTORE, MSIZE) - Working!
-  - ✅ **Storage** (SLOAD, SSTORE) - 100%
-  - ✅ **Flow control** (JUMP, JUMPI, JUMPDEST, PC, GAS) - Working!
-  - ✅ **Environmental** (ADDRESS, CALLER, CALLVALUE, etc.) - Working!
-  - ✅ **Block info** (TIMESTAMP, NUMBER, CHAINID, etc.) - Working!
-  - ✅ **Hashing** (SHA3/Keccak-256) - Working!
-  - ✅ **Events** (LOG0-4) - 100%
-  - ✅ **Calls** (CALL, STATICCALL, DELEGATECALL) - Structure complete
-  - ✅ **Creation** (CREATE, CREATE2) - Structure complete
-  - ✅ **Errors** (REVERT, SELFDESTRUCT) - Working!
-- Execution context with caller/origin/value/calldata tracking
-- State management with Merkle Patricia Trie
-- **26/26 passing tests, 2,963 lines of code, 4 working examples!**
+**This is the only component we can confidently claim works.**
 
-### What's Missing (Nice-to-Haves)  ⚠️
-- **Remaining opcodes** (~30% - mostly rare operations like SDIV, SMOD, ADDMOD)
-- **True Keccak-256** (currently using SHA3-256 approximation)
-- **Full secp256k1** (for signature verification)
-- **P2P networking** (DevP2P, RLPx) - separate concern
-- **Consensus mechanisms** (Proof of Stake) - separate concern
-- **JSON-RPC API** - separate concern
-- **Database persistence** - separate concern
-- **Ethereum test vector integration** - for final validation
+---
 
-**The EVM core is COMPLETE.** Remaining work is integration and rare opcodes.
+## 🚧 What's Implemented But NOT Yet Validated
 
-See [FINAL_STATUS.md](FINAL_STATUS.md) for complete details.
+### EVM with 80+ Opcodes (Awaiting Validation)
+- Arithmetic: ADD, SUB, MUL, DIV, MOD, EXP
+- Comparison: LT, GT, EQ, ISZERO
+- Bitwise: AND, OR, XOR, NOT, SHL, SHR
+- Stack: ALL PUSH (1-32), ALL DUP (1-16), ALL SWAP (1-16)
+- Memory: MLOAD, MSTORE, MSIZE
+- Storage: SLOAD, SSTORE
+- Flow: JUMP, JUMPI, JUMPDEST, PC, GAS
+- Environmental: ADDRESS, CALLER, CALLVALUE, etc.
+- Block Info: TIMESTAMP, NUMBER, CHAINID, etc.
+- Hashing: SHA3
+- Logging: LOG0-4
+- System: CALL, CREATE, REVERT, SELFDESTRUCT
 
-## Features Implemented
+**Status**: Works in our tests. **Not yet validated against Ethereum.**
 
-- Core data structures (Address, Hash, U256, Block, Transaction)
-- Cryptographic primitives (Keccak256 hashing)
-- RLP (Recursive Length Prefix) encoding/decoding
-- EVM (Ethereum Virtual Machine) with basic opcodes
-- State management with Merkle Patricia Trie
-- Account and storage management
+---
 
-## Architecture
+## 🎯 Validation Timeline
 
-```
-src/
-├── main.zig           # Entry point
-├── types/
-│   └── types.zig      # Core Ethereum types
-├── crypto/
-│   └── crypto.zig     # Cryptographic functions
-├── rlp/
-│   └── rlp.zig        # RLP encoding/decoding
-├── evm/
-│   └── evm.zig        # Ethereum Virtual Machine
-└── state/
-    └── state.zig      # State management and trie
-```
+### ✅ Week 1: RLP Validation (COMPLETE)
+- Validated against 83 Ethereum tests
+- Found and fixed 5 critical bugs
+- Achieved 98.8% pass rate
+- **Duration**: 1 day
 
-## Building
+### ⏳ Week 2-4: EVM Opcode Verification (IN PROGRESS)
+- Manual opcode testing
+- Yellow Paper gas cost verification
+- Reference implementation comparison
+- Target: Core opcodes verified
 
-Requires Zig 0.13.0 or later.
+### ⏳ Week 5-6: Real Contract Testing
+- Execute actual mainnet contracts
+- Find integration bugs
+- Fix systematically
+- Target: 3+ contracts working
 
-```bash
-# Build the project
-zig build
+### ⏳ Week 7: Final Validation & Launch
+- Comprehensive validation report
+- Documentation polish
+- **THEN**: Public launch
 
-# Run the node
-zig build run
+**Launch ETA**: 5-6 weeks with >90% validation proof
 
-# Run tests
-zig build test
-```
+---
 
-## Components
+## 📊 Code Metrics
 
-### Core Types (`src/types/types.zig`)
+- **Total Lines**: 4,204
+- **Core Implementation**: 3,488
+- **Validation Framework**: 716
+- **Tests (Internal)**: 66+ (all passing)
+- **Tests (Ethereum)**: 82/83 passing (98.8%)
+- **Examples**: 4 working
+- **Documentation**: 20+ files
 
-- `Address`: 20-byte Ethereum address
-- `Hash`: 32-byte hash
-- `U256`: 256-bit unsigned integer
-- `Transaction`: Ethereum transaction structure
-- `Block`: Block structure with header and transactions
-- `Account`: Account state
+---
 
-### Cryptography (`src/crypto/crypto.zig`)
+## 🐛 Bugs Found Through Validation: 5
 
-- Keccak256 hashing (SHA3-256 as placeholder)
-- secp256k1 signatures (placeholder)
-- Public key to address conversion
+**All discovered via Ethereum test validation. All fixed before launch.**
 
-### RLP Encoding (`src/rlp/rlp.zig`)
+1. ✅ RLP decoder panic on nested lists (CRITICAL)
+2. ✅ Integer overflow on huge lengths (SECURITY)
+3. ✅ Accept non-optimal encodings (SECURITY)
+4. ✅ Accept leading zeros (SECURITY)
+5. ✅ Single byte encoding bypass (SECURITY)
 
-- Encode bytes, integers, and lists
-- Decode RLP-encoded data
-- Support for short and long form encoding
+**This demonstrates our validation process works.**
 
-### EVM (`src/evm/evm.zig`)
-
-- Stack machine with 1024 depth limit
-- Memory and storage management
-- Basic opcodes: ADD, MUL, SUB, DIV, PUSH, POP, MLOAD, MSTORE, SLOAD, SSTORE, JUMP, JUMPI, RETURN
-- Gas metering
-
-### State Management (`src/state/state.zig`)
-
-- Account state database
-- Storage key-value mapping
-- Merkle Patricia Trie (basic implementation)
-- Balance and nonce management
-
-## Roadmap
-
-### Phase 1: Core Infrastructure (Current)
-- [x] Basic types and data structures
-- [x] RLP encoding/decoding
-- [x] Basic EVM implementation
-- [x] State management
-- [ ] Complete cryptographic implementations
-
-### Phase 2: Networking
-- [ ] DevP2P protocol implementation
-- [ ] Peer discovery (Kademlia DHT)
-- [ ] RLPx transport protocol
-- [ ] ETH wire protocol
-
-### Phase 3: Consensus
-- [ ] Block validation
-- [ ] Transaction pool
-- [ ] Proof of Stake (Casper FFG)
-- [ ] Sync protocols
-
-### Phase 4: APIs
-- [ ] JSON-RPC server
-- [ ] Web3 API compatibility
-- [ ] GraphQL endpoint
-- [ ] WebSocket support
-
-### Phase 5: Storage
-- [ ] LevelDB integration
-- [ ] State pruning
-- [ ] Snapshot sync
-- [ ] Archive node support
+---
 
 ## 🚀 Quick Start
 
 ```bash
-# Clone the repository
-git clone https://github.com/SMC17/eth-zig.git
-cd eth-zig
-
-# Build the project
-zig build
-
-# Run tests
-zig build test
-
-# Run the example
-zig build run
+git clone https://github.com/SMC17/zeth.git
+cd zeth
+zig build test        # Run all tests
+zig build run-counter # Run counter example
+zig build bench       # Run benchmarks
 ```
 
-### Example Output
-```
-Zeth - Ethereum Implementation in Zig
-======================================
-
-Transaction created:
-  Nonce: 0
-  Gas Price: 20000000000
-  Gas Limit: 21000
-  Value: 1000000000000000000 wei
-
-Keccak256 hash of "Hello, Ethereum!":
-  0x3c152fae473600fa75a2205ff7110142a89ebe9751b7e28bf1684067454533ab
-```
-
-## 🧪 Testing
-
-Run the full test suite:
+### Validation Commands
 ```bash
-zig build test    # All 14 tests should pass
+zig build validate-rlp          # RLP encoding (100%)
+zig build validate-rlp-decode   # RLP decoding (100%)
+zig build validate-rlp-invalid  # Security (96.2%)
 ```
-
-Individual component tests:
-```bash
-zig test src/types/types.zig   # Core types
-zig test src/crypto/crypto.zig # Cryptography
-zig test src/rlp/rlp.zig       # RLP encoding
-zig test src/evm/evm.zig       # EVM
-zig test src/state/state.zig   # State management
-```
-
-## 🤝 Contributing
-
-**We need YOUR help!** Zeth is a community-driven project and we welcome contributions of all kinds.
-
-### Immediate Needs
-- 🔐 **Cryptography**: Implement proper Keccak-256 and complete secp256k1
-- ⚡ **EVM**: Expand opcode coverage from 15 to 150+
-- 🌐 **Networking**: Build DevP2P and RLPx protocols
-- 🧪 **Testing**: Add more comprehensive tests
-- 📚 **Documentation**: Write tutorials and guides
-
-### How to Contribute
-1. Check out [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
-2. Look at [good first issues](https://github.com/SMC17/eth-zig/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
-3. Join discussions in [GitHub Discussions](https://github.com/SMC17/eth-zig/discussions)
-4. Submit PRs, report bugs, suggest features!
-
-Read our [ROADMAP.md](ROADMAP.md) to see where we're headed.
-
-## 📖 Documentation
-
-- [ROADMAP.md](ROADMAP.md) - Project roadmap and milestones
-- [CONTRIBUTING.md](CONTRIBUTING.md) - How to contribute
-- [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) - Detailed feature status
-- [Ethereum Yellow Paper](https://ethereum.github.io/yellowpaper/paper.pdf) - Ethereum specification
-
-## 🎯 Why Zig for Ethereum?
-
-- **Memory Safety**: Compile-time checks prevent common vulnerabilities
-- **Performance**: No hidden control flow, explicit allocations
-- **Simplicity**: No hidden memory management, clear error handling
-- **Cross-platform**: Easy compilation to any target
-- **Compile-time Execution**: Powerful metaprogramming without macros
-
-## 🌟 Star History
-
-If you find Zeth interesting, give us a star! It helps us grow the community.
-
-## 💬 Community
-
-- **GitHub Issues**: [Report bugs & request features](https://github.com/SMC17/eth-zig/issues)
-- **GitHub Discussions**: [Ask questions & share ideas](https://github.com/SMC17/eth-zig/discussions)
-- **Twitter**: Coming soon - follow for updates
-- **Discord**: Coming soon - join for real-time chat
-
-## 📄 License
-
-MIT License - See [LICENSE](LICENSE) for details
-
-## ⚠️ Disclaimer
-
-**This is alpha software under active development.**
-
-- NOT production-ready
-- NOT audited for security
-- APIs will change
-- Do NOT use with real funds
-- Use at your own risk
-
-This is an educational and experimental project. We're building in public and learning together.
-
-## 🙏 Acknowledgments
-
-Inspired by:
-- [go-ethereum (Geth)](https://github.com/ethereum/go-ethereum) - The reference Ethereum implementation
-- [Reth](https://github.com/paradigmxyz/reth) - Rust Ethereum implementation
-- [Zig](https://ziglang.org/) - The Zig programming language
-
-Special thanks to the Ethereum Foundation and Zig community.
 
 ---
 
-**Built with ❤️ by the Zeth community**
+## 📖 Documentation
 
-[⭐ Star us on GitHub](https://github.com/SMC17/eth-zig) | [🐛 Report a Bug](https://github.com/SMC17/eth-zig/issues/new?template=bug_report.md) | [💡 Request a Feature](https://github.com/SMC17/eth-zig/issues/new?template=feature_request.md)
+- [PROJECT_STATUS.md](PROJECT_STATUS.md) - Current validated state
+- [WEEK1_VALIDATION_REPORT.md](WEEK1_VALIDATION_REPORT.md) - RLP validation details
+- [BUGS_FOUND.md](BUGS_FOUND.md) - All bugs found via validation
+- [REALITY_CHECK.md](REALITY_CHECK.md) - Honest assessment
+- [ROADMAP.md](ROADMAP.md) - Long-term vision
+- [CONTRIBUTING.md](CONTRIBUTING.md) - How to contribute (when ready)
 
+---
+
+## ⚠️ Critical Disclaimer
+
+**This is alpha software under active validation.**
+
+- ✅ RLP component: Ethereum validated (98.8%)
+- ⚠️ EVM component: Not yet validated against Ethereum
+- ❌ NOT production ready
+- ❌ NOT audited
+- ❌ Do NOT use with real funds
+
+**We're building in public with radical honesty about our progress.**
+
+---
+
+## 🎯 Why We're Not Launching Yet
+
+We built 4,204 lines of code and it passes our tests. But **that's not enough**.
+
+**Professional approach**:
+1. Build the system ✅
+2. **Validate against Ethereum** ⏳ (in progress)
+3. Find and fix all bugs ⏳
+4. **Then** launch with proof
+
+**Current**: 98.8% RLP validated. More validation needed.
+
+---
+
+## 💡 Why Zig for Ethereum?
+
+- **Memory Safety**: Compile-time checks prevent vulnerabilities
+- **Performance**: No GC, explicit allocations
+- **Simplicity**: No hidden control flow
+- **Cross-Platform**: Trivial cross-compilation
+
+**Plus**: First serious Ethereum client in Zig means opportunity for innovation.
+
+---
+
+## 📄 License
+
+MIT License - See [LICENSE](LICENSE)
+
+---
+
+## 🙏 Acknowledgments
+
+- [Ethereum Foundation](https://ethereum.org) - Test vectors and specification
+- [go-ethereum](https://github.com/ethereum/go-ethereum) - Reference implementation
+- [Zig](https://ziglang.org/) - The language
+
+---
+
+**Building systematically. Validating thoroughly. Launching with proof.**
+
+**Repository**: https://github.com/SMC17/zeth  
+**Status**: Week 1 validated (98.8%), Week 2 in progress  
+**Launch**: When validated, not when excited
+
+*Last updated: October 29, 2025*
