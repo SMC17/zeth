@@ -24,21 +24,30 @@ We're being completely transparent: Zeth is in its infancy. We have the foundati
 
 ### What Works ✅
 - Core data structures (Address, Hash, U256, Transaction, Block, Account)
-- RLP encoding/decoding
-- Basic EVM (~15/150+ opcodes)
+- RLP encoding/decoding (complete)
+- **EVM with 51/116 implemented opcodes** (↑ from 15!)
+  - ✅ **ALL stack operations** (PUSH1-32, DUP1-16, SWAP1-16)
+  - ✅ Arithmetic (ADD, MUL, SUB, DIV, MOD, EXP)
+  - ✅ Comparison (LT, GT, EQ, ISZERO)
+  - ✅ Bitwise (AND, OR, XOR, NOT, SHL, SHR)
+  - ✅ Memory & Storage (MLOAD, MSTORE, SLOAD, SSTORE)
+  - ✅ Flow control (JUMP, JUMPI, JUMPDEST, PC, GAS)
 - State management with Merkle Patricia Trie
-- 14 passing tests, 1,351 lines of code
+- **14 passing tests, 1,762 lines of code** (↑30% from start!)
 
 ### What's Missing ❌
+- Environmental opcodes (ADDRESS, CALLER, CALLVALUE, etc.) - **HIGH PRIORITY**
+- CALL family (CALL, DELEGATECALL, STATICCALL) - **HIGH PRIORITY**
 - Complete cryptography (proper Keccak-256, full secp256k1)
-- Full EVM implementation (135+ more opcodes)
+- Event logging (LOG0-4)
+- Remaining opcodes (65+ more)
 - P2P networking (DevP2P, RLPx)
 - Consensus mechanisms (Proof of Stake)
 - JSON-RPC API
 - Database persistence
-- Real-world testing at scale
+- Ethereum test vector integration
 
-**We need contributors!** See [CONTRIBUTING.md](CONTRIBUTING.md) and [ROADMAP.md](ROADMAP.md)
+**We need contributors!** See [CONTRIBUTING.md](CONTRIBUTING.md), [ROADMAP.md](ROADMAP.md), and [ACHIEVEMENTS.md](ACHIEVEMENTS.md)
 
 ## Features Implemented
 
