@@ -119,7 +119,7 @@ pub const Decoded = union(enum) {
     list: []const Decoded,
 };
 
-pub fn decode(data: []const u8, allocator: std.mem.Allocator) !Decoded {
+pub fn decode(data: []const u8, allocator: std.mem.Allocator) (RlpError || std.mem.Allocator.Error)!Decoded {
     if (data.len == 0) return error.UnexpectedEnd;
     
     const prefix = data[0];
@@ -165,7 +165,7 @@ pub fn decode(data: []const u8, allocator: std.mem.Allocator) !Decoded {
     }
 }
 
-fn decodeList(data: []const u8, allocator: std.mem.Allocator) !Decoded {
+fn decodeList(data: []const u8, allocator: std.mem.Allocator) (RlpError || std.mem.Allocator.Error)!Decoded {
     var items = try std.ArrayList(Decoded).initCapacity(allocator, 8);
     errdefer items.deinit(allocator);
     
@@ -180,7 +180,7 @@ fn decodeList(data: []const u8, allocator: std.mem.Allocator) !Decoded {
         };
     }
     
-    return Decoded{ .list = try items.toOwnedSlice() };
+    return Decoded{ .list = try items.toOwnedSlice(allocator) };
 }
 
 fn lengthInBytes(len: usize) usize {
