@@ -171,16 +171,58 @@ fn decodeList(data: []const u8, allocator: std.mem.Allocator) (RlpError || std.m
     
     var offset: usize = 0;
     while (offset < data.len) {
-        const item = try decode(data[offset..], allocator);
+        // Calculate size of this item before decoding
+        const item_size = try calculateRlpItemSize(data[offset..]);
+        
+        const item = try decode(data[offset..offset + item_size], allocator);
         try items.append(allocator, item);
         
-        offset += switch (item) {
-            .bytes => |b| b.ptr - data[offset..].ptr + b.len,
-            .list => |_| @panic("TODO: calculate list size"),
-        };
+        offset += item_size;
     }
     
     return Decoded{ .list = try items.toOwnedSlice(allocator) };
+}
+
+/// Calculate the total size of an RLP item (including prefix bytes)
+fn calculateRlpItemSize(data: []const u8) !usize {
+    if (data.len == 0) return error.UnexpectedEnd;
+    
+    const prefix = data[0];
+    
+    if (prefix < 0x80) {
+        // Single byte
+        return 1;
+    } else if (prefix <= 0xb7) {
+        // Short string: 1 + length
+        const len = prefix - 0x80;
+        return 1 + len;
+    } else if (prefix <= 0xbf) {
+        // Long string: 1 + len_bytes + length
+        const len_bytes = prefix - 0xb7;
+        if (data.len < 1 + len_bytes) return error.UnexpectedEnd;
+        
+        var len: usize = 0;
+        for (1..1 + len_bytes) |i| {
+            len = (len << 8) | data[i];
+        }
+        
+        return 1 + len_bytes + len;
+    } else if (prefix <= 0xf7) {
+        // Short list: 1 + total_len
+        const len = prefix - 0xc0;
+        return 1 + len;
+    } else {
+        // Long list: 1 + len_bytes + total_len
+        const len_bytes = prefix - 0xf7;
+        if (data.len < 1 + len_bytes) return error.UnexpectedEnd;
+        
+        var len: usize = 0;
+        for (1..1 + len_bytes) |i| {
+            len = (len << 8) | data[i];
+        }
+        
+        return 1 + len_bytes + len;
+    }
 }
 
 fn lengthInBytes(len: usize) usize {
