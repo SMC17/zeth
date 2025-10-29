@@ -204,6 +204,24 @@ pub fn build(b: *std.Build) void {
     const rlp_decode_validator_run = b.addRunArtifact(rlp_decode_validator_exe);
     const validate_rlp_decode_step = b.step("validate-rlp-decode", "Validate RLP decoding against Ethereum");
     validate_rlp_decode_step.dependOn(&rlp_decode_validator_run.step);
+    
+    // Invalid RLP Validator
+    const rlp_invalid_validator_mod = b.createModule(.{
+        .root_source_file = b.path("validation/rlp_invalid_validator.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    rlp_invalid_validator_mod.addImport("rlp", rlp_mod);
+    
+    const rlp_invalid_validator_exe = b.addExecutable(.{
+        .name = "rlp_invalid_validator",
+        .root_module = rlp_invalid_validator_mod,
+    });
+    b.installArtifact(rlp_invalid_validator_exe);
+    
+    const rlp_invalid_validator_run = b.addRunArtifact(rlp_invalid_validator_exe);
+    const validate_rlp_invalid_step = b.step("validate-rlp-invalid", "Test invalid RLP rejection");
+    validate_rlp_invalid_step.dependOn(&rlp_invalid_validator_run.step);
 
     // Tests
     const test_step = b.step("test", "Run unit tests");
