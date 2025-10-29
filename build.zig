@@ -148,6 +148,26 @@ pub fn build(b: *std.Build) void {
     const events_run = b.addRunArtifact(events_exe);
     const events_step = b.step("run-events", "Run the events example");
     events_step.dependOn(&events_run.step);
+    
+    // Benchmarks
+    const bench_mod = b.createModule(.{
+        .root_source_file = b.path("src/benchmarks.zig"),
+        .target = target,
+        .optimize = .ReleaseFast, // Optimize benchmarks
+    });
+    bench_mod.addImport("types", types_mod);
+    bench_mod.addImport("crypto", crypto_mod);
+    bench_mod.addImport("evm", evm_mod);
+    
+    const bench_exe = b.addExecutable(.{
+        .name = "benchmarks",
+        .root_module = bench_mod,
+    });
+    b.installArtifact(bench_exe);
+    
+    const bench_run = b.addRunArtifact(bench_exe);
+    const bench_step = b.step("bench", "Run performance benchmarks");
+    bench_step.dependOn(&bench_run.step);
 
     // Tests
     const test_step = b.step("test", "Run unit tests");
@@ -220,4 +240,34 @@ pub fn build(b: *std.Build) void {
     });
     const run_comprehensive_tests = b.addRunArtifact(comprehensive_tests);
     test_step.dependOn(&run_comprehensive_tests.step);
+    
+    // Edge case tests for U256
+    const types_edge_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/types/edge_case_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    types_edge_test_mod.addImport("types", types_mod);
+    
+    const types_edge_tests = b.addTest(.{
+        .root_module = types_edge_test_mod,
+    });
+    const run_types_edge_tests = b.addRunArtifact(types_edge_tests);
+    test_step.dependOn(&run_types_edge_tests.step);
+    
+    // Edge case tests for EVM
+    const evm_edge_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/evm/edge_case_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    evm_edge_test_mod.addImport("evm", evm_mod);
+    evm_edge_test_mod.addImport("types", types_mod);
+    evm_edge_test_mod.addImport("crypto", crypto_mod);
+    
+    const evm_edge_tests = b.addTest(.{
+        .root_module = evm_edge_test_mod,
+    });
+    const run_evm_edge_tests = b.addRunArtifact(evm_edge_tests);
+    test_step.dependOn(&run_evm_edge_tests.step);
 }
