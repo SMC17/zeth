@@ -84,6 +84,14 @@ pub fn main() !void {
 fn encodeValue(allocator: std.mem.Allocator, value: std.json.Value) ![]u8 {
     switch (value) {
         .string => |s| {
+            // Check if it's a large integer (prefixed with #)
+            if (s.len > 0 and s[0] == '#') {
+                // Parse big integer from decimal string
+                const decimal_str = s[1..];
+                const bytes = try parseBigInt(allocator, decimal_str);
+                defer allocator.free(bytes);
+                return try rlp.encodeBytes(bytes, allocator);
+            }
             return try rlp.encodeBytes(s, allocator);
         },
         .integer => |i| {
@@ -107,6 +115,45 @@ fn encodeValue(allocator: std.mem.Allocator, value: std.json.Value) ![]u8 {
             return error.UnsupportedType;
         },
     }
+}
+
+fn parseBigInt(allocator: std.mem.Allocator, decimal_str: []const u8) ![]u8 {
+    // TODO: Proper arbitrary precision integer parsing
+    // For now, handle common test cases manually
+    // This is a known limitation - large integers not fully supported yet
+    
+    // Use std.math.big.int for parsing
+    var value = try std.math.big.int.Managed.init(allocator);
+    defer value.deinit();
+    
+    try value.setString(10, decimal_str);
+    
+    // Get bytes needed
+    const bit_count = value.bitCountAbs();
+    const byte_count = if (bit_count == 0) 0 else (bit_count + 7) / 8;
+    
+    if (byte_count == 0) {
+        return try allocator.dupe(u8, &[_]u8{});
+    }
+    
+    var bytes = try allocator.alloc(u8, byte_count);
+    
+    // Write out bytes manually (big-endian)
+    const limbs = value.toConst().limbs;
+    const limb_size = @sizeOf(std.math.big.Limb);
+    
+    for (0..byte_count) |i| {
+        const limb_idx = i / limb_size;
+        const byte_idx = i % limb_size;
+        if (limb_idx < limbs.len) {
+            const shift = @as(std.math.Log2Int(std.math.big.Limb), @intCast(byte_idx * 8));
+            bytes[byte_count - 1 - i] = @truncate(limbs[limb_idx] >> shift);
+        } else {
+            bytes[byte_count - 1 - i] = 0;
+        }
+    }
+    
+    return bytes;
 }
 
 fn hexToBytes(allocator: std.mem.Allocator, hex: []const u8) ![]u8 {
