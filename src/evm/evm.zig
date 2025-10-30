@@ -336,18 +336,23 @@ pub const EVM = struct {
         try self.stack.push(self.allocator, base);
         
         // Gas cost: 10 + 50 * (number of bytes to represent exponent)
-        // Count significant bytes in exponent (leading zeros don't count)
-        var exp_bytes: u64 = 0;
-        var has_nonzero = false;
-        for (exponent.toBytes()) |byte| {
-            if (byte != 0) {
-                has_nonzero = true;
-            }
-            if (has_nonzero) {
-                exp_bytes += 1;
+        // Count bytes from LSB (right to left), stopping at first non-zero
+        // This gives us the minimum bytes needed to represent the value
+        const exp_bytes_array = exponent.toBytes();
+        var exp_bytes: u64 = 1; // At least 1 byte
+        var found_significant = false;
+        var i: usize = exp_bytes_array.len;
+        while (i > 0) {
+            i -= 1;
+            if (exp_bytes_array[i] != 0) {
+                found_significant = true;
+                exp_bytes = @as(u64, exp_bytes_array.len - i);
+                break;
             }
         }
-        if (exp_bytes == 0) exp_bytes = 1; // At least 1 byte
+        if (!found_significant) {
+            exp_bytes = 1; // Zero exponent = 1 byte
+        }
         
         self.gas_used += 10 + 50 * exp_bytes;
     }
