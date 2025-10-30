@@ -1,197 +1,284 @@
-# Zeth Implementation & Repository Excellence Plan
+# Implementation Plan: Path to Sophisticated EVM
 
-**Status**: Execution Phase  
-**Date**: January 2025
+## Current Foundation (Week 4)
 
-## Executive Summary
+### What We Have
+- **Core EVM**: ~70/256 opcodes implemented (~27%)
+- **RLP**: 98.8% Ethereum validated
+- **Testing**: 103/103 tests passing
+- **Reference Comparison**: 11/11 critical opcodes validated
+- **Architecture**: Clean, modular design
 
-Zeth is **~30% of the way to full EVM parity** with:
--  **11/256 opcodes fully validated** (4.3%)
--  **~70/256 opcodes implemented** (~27%)
--  **98.8% RLP validation** (production-ready)
--  **Reference comparison framework** operational
+### What We Need
 
-**Estimated timeline to full parity**: 6-8 weeks of focused development
+## Phase 1: Complete EVM Implementation (Weeks 5-8)
 
-## Phase 1: Repository Professionalization (Week 4)
+### Priority 1: Missing Critical Opcodes
 
-### Goals
-1.  CI/CD pipeline
-2.  Repository structure cleanup
-3.  Professional documentation
-4.  GitHub Projects/Issues setup
+#### Copy Operations (Partially Done)
+- ✅ CALLDATACOPY
+- ✅ CODECOPY  
+- ✅ RETURNDATACOPY
+- ✅ RETURNDATASIZE
+- 🚧 EXTCODECOPY (needs state lookup)
 
-### Tasks
+#### Signed Arithmetic (Partially Done)
+- ✅ SDIV
+- ✅ SMOD
+- ✅ SIGNEXTEND
+- ✅ SLT, SGT
+- ✅ SAR (needs proper implementation)
+- 🚧 Proper signed arithmetic (handle two's complement correctly)
 
-#### CI/CD Setup 
-- [x] GitHub Actions workflow created
-- [ ] Test on actual repository
-- [ ] Add badges to README
-- [ ] Configure branch protection
+#### External Account Operations (Stubs)
+- ✅ BALANCE (stub - returns 0)
+- ✅ EXTCODESIZE (stub - returns 0)
+- ✅ EXTCODECOPY (stub - zeros memory)
+- ✅ EXTCODEHASH (stub - returns 0)
+- 🚧 Need actual state lookup implementation
 
-#### Repository Cleanup
-- [x] Create docs/ structure
-- [ ] Move 37+ .md files to organized structure
-- [ ] Update all internal links
-- [ ] Create symlinks if needed for backward compatibility
+#### Remaining Critical Opcodes
+- 🚧 ADDMOD, MULMOD (modular arithmetic)
+- 🚧 BYTE (extract byte) - PARTIALLY DONE
+- 🚧 MSTORE8 (store single byte)
+- 🚧 BLOCKHASH (block hash lookup)
+- 🚧 SELFBALANCE (current account balance)
+- 🚧 BASEFEE (EIP-1559 base fee)
 
-#### Professional Documentation
-- [x] Architecture documentation
-- [x] Development guide
-- [x] EVM parity status
-- [ ] Rewrite README.md (professional)
-- [ ] Create comprehensive CONTRIBUTING.md
-- [ ] Create validation report consolidation
+### Priority 2: System Operations
 
-### Timeline: 2-3 days
+#### CREATE/CREATE2
+- 🚧 CREATE (create new contract)
+  - Deploy bytecode
+  - Initialize contract
+  - Return address
+  - Handle failures
 
-## Phase 2: EVM Parity Completion (Weeks 5-8)
+- 🚧 CREATE2 (deterministic creation)
+  - Same as CREATE but deterministic address
+  - EIP-1014 implementation
 
-### Priority 1: Core Missing Opcodes (Week 5)
-- Copy operations: CALLDATACOPY, CODECOPY, RETURNDATACOPY, EXTCODECOPY
-- Signed operations: SDIV, SMOD, SIGNEXTEND
-- Comparison: SLT, SGT
-- Bitwise: BYTE, SAR
+#### CALL Operations
+- 🚧 CALL (full implementation)
+  - Execute external contract
+  - Transfer value
+  - Handle gas
+  - Return data
 
-### Priority 2: External Operations (Week 6)
-- BALANCE
-- EXTCODESIZE
-- EXTCODEHASH
-- BLOCKHASH
-- SELFBALANCE
+- 🚧 CALLCODE (legacy)
+- 🚧 DELEGATECALL (full implementation)
+- 🚧 STATICCALL (full implementation)
 
-### Priority 3: System Operations (Week 7)
-- Complete CALL/CREATE/CREATE2 validation
-- Precompiles (ECRECOVER, SHA256, RIPEMD160, etc.)
-- Full gas cost verification
+#### Return & Revert
+- ✅ RETURN (basic)
+- ✅ REVERT (basic)
+- 🚧 Proper return data handling
+- 🚧 REVERT with reason string
 
-### Priority 4: Validation (Week 8)
-- Ethereum test suite integration
-- Full opcode validation
-- Performance benchmarking
-- Edge case testing
+### Priority 3: Precompiled Contracts
 
-## Phase 3: Ecosystem Development (Months 2-4)
+#### ECDSA Operations
+- 🚧 ecrecover (address recovery from signature)
+  - secp256k1 operations
+  - Signature verification
+  - Address extraction
 
-### Infrastructure
-- JSON-RPC interface
-- Transaction processing
-- Block execution
-- State tree implementation
-- Network layer (devp2p)
+#### Hash Functions
+- 🚧 SHA256
+- 🚧 RIPEMD160
+- ✅ Keccak-256 (SHA3) - needs verification
 
-### Tools & Resources
-- Development tools
-- Debugger
-- Profiler
-- Educational materials
-- Tutorial series
+#### BN128 Operations (EIP-196, EIP-197)
+- 🚧 ecadd (elliptic curve addition)
+- 🚧 ecmul (elliptic curve multiplication)
+- 🚧 ecpairing (pairing check)
 
-### Community Building
-- Active discussions
-- Issue templates
-- Contribution guidelines
-- Code of conduct
-- Research documentation
+#### BLAKE2b (EIP-152)
+- 🚧 blake2b_f compression function
 
-## Branching Strategy
+### Priority 4: Gas Cost Verification
 
-### main (Production)
-- Stable, validated releases
-- 100% test coverage
-- Full documentation
-- Only merge from develop after validation
+#### Current Status
+- ✅ Basic gas costs implemented
+- ✅ EIP-2929 (cold/warm access) implemented
+- ✅ EIP-2200 (SSTORE) implemented
+- 🚧 Need verification for all opcodes
 
-### develop (Integration)
-- Feature integration
-- Pre-release testing
-- Continuous validation
-- Default branch for PRs
+#### Verification Tasks
+- Compare against Ethereum Yellow Paper
+- Verify against Geth
+- Verify against PyEVM
+- Document gas cost formulas
 
-### feature/* (Development)
-- Individual features
-- Opcode implementations
-- Tool development
-- Documentation improvements
+## Phase 2: State Management (Weeks 9-10)
 
-### parity/* (Compliance)
-- EVM specification compliance
-- Ethereum test fixes
-- Reference alignment
-- Backward compatibility
+### Account State
+- 🚧 Account structure
+  - Balance
+  - Nonce
+  - Code hash
+  - Storage root
 
-### research/* (Experimentation)
-- Experimental features
-- Performance research
-- Alternative designs
-- Academic work
+- 🚧 State trie
+  - Merkle Patricia Trie
+  - State root calculation
+  - State proof generation
+
+### Storage State
+- ✅ Basic storage (HashMap)
+- 🚧 Storage trie
+  - Sparse Merkle tree
+  - Storage root per account
+  - Storage proofs
+
+### Transaction State
+- 🚧 Transaction execution
+  - Pre-execution validation
+  - Gas calculation
+  - State transitions
+  - Post-execution cleanup
+
+## Phase 3: Testing & Validation (Weeks 11-12)
+
+### Ethereum Test Suite Integration
+- 🚧 GeneralStateTests
+- 🚧 VMTests
+- 🚧 BlockchainTests
+- 🚧 TransactionTests
+
+### Reference Comparison
+- ✅ PyEVM integration (11 opcodes)
+- 🚧 Expand to all opcodes
+- 🚧 Geth integration
+- 🚧 Continuous comparison
+
+### Fuzzing
+- 🚧 Property-based testing
+- 🚧 Mutation testing
+- 🚧 Crash testing
+
+## Phase 4: Performance Optimization (Weeks 13-16)
+
+### Memory Optimization
+- 🚧 Custom allocators
+- 🚧 Memory pooling
+- 🚧 Zero-copy operations
+
+### Execution Optimization
+- 🚧 Opcode dispatch optimization
+- 🚧 Hot path optimization
+- 🚧 Gas calculation optimization
+
+### Benchmarking
+- 🚧 Comprehensive benchmarks
+- 🚧 Compare against references
+- 🚧 Identify bottlenecks
+
+## Phase 5: Advanced Features (Weeks 17-20)
+
+### EVM-C API
+- 🚧 Implement EVMC interface
+- 🚧 Enable client integration
+- 🚧 Standard API
+
+### JSON-RPC
+- 🚧 Basic RPC server
+- 🚧 eth_call
+- 🚧 eth_sendTransaction
+- 🚧 Full API compatibility
+
+### Networking (Foundation)
+- 🚧 P2P protocol basics
+- 🚧 Block propagation
+- 🚧 Transaction pool
+
+## Implementation Checklist
+
+### Immediate (Next 2 Weeks)
+- [ ] Complete COPY operations (fix EXTCODECOPY)
+- [ ] Complete signed arithmetic (proper two's complement)
+- [ ] Implement external account state lookup
+- [ ] Implement ADDMOD, MULMOD
+- [ ] Implement MSTORE8
+- [ ] Implement BLOCKHASH
+- [ ] Implement SELFBALANCE
+
+### Short Term (Weeks 5-8)
+- [ ] Implement CREATE/CREATE2
+- [ ] Implement CALL operations fully
+- [ ] Implement precompiled contracts
+- [ ] Gas cost verification
+- [ ] State management foundation
+
+### Medium Term (Weeks 9-12)
+- [ ] Full Ethereum test suite integration
+- [ ] State trie implementation
+- [ ] Transaction processing
+- [ ] Performance optimization
+
+### Long Term (Weeks 13+)
+- [ ] EVM-C API
+- [ ] JSON-RPC
+- [ ] Networking basics
+- [ ] Full blockchain considerations
 
 ## Success Metrics
 
-### Technical Excellence
-- [ ] 100% opcode implementation
-- [ ] 100% Ethereum test suite passing
-- [ ] <5% performance gap vs reference implementations
-- [ ] Zero critical bugs in validated components
-- [ ] Comprehensive documentation
+### Phase 1 Complete When:
+- ✅ All 256 opcodes implemented
+- ✅ 100% Ethereum test suite passing
+- ✅ Gas costs verified
+- ✅ Reference comparison 100% match
 
-### Professional Standards
-- [ ] Clean repository structure
-- [ ] CI/CD passing on all commits
-- [ ] Professional README
-- [ ] Clear contribution guidelines
-- [ ] Active community engagement
+### Phase 2 Complete When:
+- ✅ State management working
+- ✅ Transaction processing complete
+- ✅ State trie implemented
 
-### Ecosystem Impact
-- [ ] Used in 3+ projects
-- [ ] Featured in Zig/Ethereum communities
-- [ ] Educational materials created
-- [ ] Research published
-- [ ] Spinoff projects initiated
+### Phase 3 Complete When:
+- ✅ Performance benchmarks competitive
+- ✅ Memory usage optimized
+- ✅ Execution speed optimized
 
-## Immediate Next Steps
+### Phase 4 Complete When:
+- ✅ EVM-C API implemented
+- ✅ JSON-RPC working
+- ✅ Can integrate with Ethereum tools
 
-1. **Complete repository cleanup** (this week)
-   - Move all internal docs to docs/internal/
-   - Organize public docs in docs/
-   - Update README.md
-   - Test CI/CD pipeline
+## Risk Mitigation
 
-2. **Implement missing core opcodes** (next week)
-   - Start with copy operations
-   - Add signed arithmetic
-   - Validate each against reference
+### Technical Risks
+- **Complexity**: Break into small, testable pieces
+- **Performance**: Benchmark early and often
+- **Compatibility**: Test against reference implementations continuously
 
-3. **Expand validation** (ongoing)
-   - Add more opcodes to reference comparison
-   - Integrate Ethereum test suite
-   - Performance benchmarking
+### Timeline Risks
+- **Scope Creep**: Stick to prioritized roadmap
+- **Delays**: Buffer time in estimates
+- **Dependencies**: Identify critical path early
 
-4. **Community setup** (this week)
-   - GitHub Projects board
-   - Issue templates
-   - Discussion categories
-   - Contribution guidelines
+## Resources Needed
 
-## Vision Statement
+### Development
+- Continue systematic implementation
+- Maintain test coverage
+- Document as we go
 
-**Zeth will be**:
-- The **most accessible** EVM implementation for learning
-- The **most validated** EVM implementation in Zig
-- The **foundation layer** for Ethereum ecosystem tools
-- The **bridge** between Zig and Ethereum communities
-- The **research platform** for EVM innovation
+### Testing
+- Access to Ethereum test suite
+- Reference implementations (PyEVM, Geth)
+- Continuous integration
 
-**By achieving**:
-- 100% opcode parity with Ethereum mainnet
-- 100% test suite validation
-- Production-grade quality and performance
-- Comprehensive documentation and education
-- Active, supportive community
+### Community
+- Contributor engagement
+- Issue tracking
+- Documentation
 
 ---
 
-**This is our roadmap. We build systematically. We validate thoroughly. We launch when ready.**
-
-Last updated: January 2025
-
+**Next Immediate Steps**:
+1. Fix EXTCODECOPY to use actual state lookup
+2. Implement proper signed arithmetic
+3. Implement state lookup for BALANCE, EXTCODESIZE, etc.
+4. Add ADDMOD, MULMOD operations
+5. Expand test coverage
