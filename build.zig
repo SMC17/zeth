@@ -370,4 +370,49 @@ pub fn build(b: *std.Build) void {
     });
     const run_opcode_verification_tests = b.addRunArtifact(opcode_verification_tests);
     test_step.dependOn(&run_opcode_verification_tests.step);
+    
+    // Reference interfaces tests
+    const reference_interfaces_mod = b.createModule(.{
+        .root_source_file = b.path("validation/reference_interfaces.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    
+    const reference_interfaces_tests = b.addTest(.{
+        .root_module = reference_interfaces_mod,
+    });
+    const run_reference_interfaces_tests = b.addRunArtifact(reference_interfaces_tests);
+    test_step.dependOn(&run_reference_interfaces_tests.step);
+    
+    // Discrepancy tracker tests
+    const discrepancy_tracker_mod = b.createModule(.{
+        .root_source_file = b.path("validation/discrepancy_tracker.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    discrepancy_tracker_mod.addImport("types", types_mod);
+    
+    const discrepancy_tracker_tests = b.addTest(.{
+        .root_module = discrepancy_tracker_mod,
+    });
+    const run_discrepancy_tracker_tests = b.addRunArtifact(discrepancy_tracker_tests);
+    test_step.dependOn(&run_discrepancy_tracker_tests.step);
+    
+    // Reference test runner
+    const reference_test_runner_mod = b.createModule(.{
+        .root_source_file = b.path("validation/reference_test_runner.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    reference_test_runner_mod.addImport("evm", evm_mod);
+    reference_test_runner_mod.addImport("types", types_mod);
+    reference_test_runner_mod.addImport("comparison_tool", comparison_test_mod);
+    reference_test_runner_mod.addImport("reference_interfaces", reference_interfaces_mod);
+    reference_test_runner_mod.addImport("discrepancy_tracker", discrepancy_tracker_mod);
+    
+    const reference_test_runner_tests = b.addTest(.{
+        .root_module = reference_test_runner_mod,
+    });
+    const run_reference_test_runner_tests = b.addRunArtifact(reference_test_runner_tests);
+    test_step.dependOn(&run_reference_test_runner_tests.step);
 }
