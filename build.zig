@@ -377,6 +377,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    reference_interfaces_mod.addImport("types", types_mod);
     
     const reference_interfaces_tests = b.addTest(.{
         .root_module = reference_interfaces_mod,
