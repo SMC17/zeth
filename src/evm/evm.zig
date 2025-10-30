@@ -45,6 +45,8 @@ pub const EVM = struct {
     storage: Storage,
     context: ExecutionContext,
     logs: std.ArrayList(Log),
+    // Track warm storage accesses for EIP-2200
+    warm_storage: std.AutoHashMap(types.U256, void),
 
     pub fn init(allocator: std.mem.Allocator, gas_limit: u64) !EVM {
         return EVM{
@@ -56,6 +58,7 @@ pub const EVM = struct {
             .storage = Storage.init(allocator),
             .context = ExecutionContext.default(),
             .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
+            .warm_storage = std.AutoHashMap(types.U256, void).init(allocator),
         };
     }
     
@@ -69,6 +72,7 @@ pub const EVM = struct {
             .storage = Storage.init(allocator),
             .context = context,
             .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
+            .warm_storage = std.AutoHashMap(types.U256, void).init(allocator),
         };
     }
 
@@ -77,6 +81,25 @@ pub const EVM = struct {
         self.memory.deinit(self.allocator);
         self.storage.deinit();
         self.logs.deinit(self.allocator);
+        self.warm_storage.deinit();
+    }
+    
+    /// Calculate gas cost for memory expansion
+    /// Formula: (new_words^2 / 512) + (3 * new_words) - (old_words^2 / 512) - (3 * old_words)
+    /// Simplified: memory_expansion_cost = (words^2) / 512 + 3 * words
+    fn memoryExpansionCost(self: *EVM, new_size_bytes: usize) u64 {
+        const old_words = (self.memory.data.items.len + 31) / 32;
+        const new_words = (new_size_bytes + 31) / 32;
+        
+        if (new_words <= old_words) {
+            return 0; // No expansion
+        }
+        
+        // Gas = (new_words^2 / 512) + (3 * new_words) - (old_words^2 / 512) - (3 * old_words)
+        const old_cost = (old_words * old_words) / 512 + 3 * old_words;
+        const new_cost = (new_words * new_words) / 512 + 3 * new_words;
+        
+        return new_cost - old_cost;
     }
 
     pub fn execute(self: *EVM, code: []const u8, data: []const u8) !ExecutionResult {
@@ -305,11 +328,28 @@ pub const EVM = struct {
     }
     
     fn opExp(self: *EVM) !void {
-        const a = try self.stack.pop();
-        const b = try self.stack.pop();
-        _ = b;
-        try self.stack.push(self.allocator, a); // TODO: Implement exponentiation
-        self.gas_used += 10;
+        const base = try self.stack.pop();
+        const exponent = try self.stack.pop();
+        
+        // TODO: Implement actual exponentiation
+        // For now, just push base (placeholder)
+        try self.stack.push(self.allocator, base);
+        
+        // Gas cost: 10 + 50 * (number of bytes to represent exponent)
+        // Count significant bytes in exponent (leading zeros don't count)
+        var exp_bytes: u64 = 0;
+        var has_nonzero = false;
+        for (exponent.toBytes()) |byte| {
+            if (byte != 0) {
+                has_nonzero = true;
+            }
+            if (has_nonzero) {
+                exp_bytes += 1;
+            }
+        }
+        if (exp_bytes == 0) exp_bytes = 1; // At least 1 byte
+        
+        self.gas_used += 10 + 50 * exp_bytes;
     }
     
     // Comparison opcodes
@@ -435,7 +475,9 @@ pub const EVM = struct {
     }
     
     fn opPc(self: *EVM, pc: *usize) !void {
-        const value = types.U256.fromU64(pc.*);
+        // PC returns the position of the current instruction
+        // Since pc is incremented before executeOpcode, we subtract 1
+        const value = types.U256.fromU64(pc.* - 1);
         try self.stack.push(self.allocator, value);
         self.gas_used += 2;
     }
@@ -449,28 +491,33 @@ pub const EVM = struct {
     // Environmental opcodes
     fn opAddress(self: *EVM) !void {
         var value = types.U256.zero();
-        // Address is 20 bytes, store in last 20 bytes of U256
-        for (self.context.address.bytes, 0..) |byte, i| {
-            if (i < 20) value.limbs[0] |= @as(u64, byte) << @intCast((19 - i) * 8);
-        }
+        // Address is 20 bytes, store in last 20 bytes of U256 (bytes 12-31 in big-endian)
+        // U256 is 32 bytes: bytes[0] is MSB, bytes[31] is LSB
+        // Address goes in bytes[12..32] (last 20 bytes)
+        const addr_bytes = self.context.address.bytes;
+        var result_bytes = value.toBytes();
+        @memcpy(result_bytes[12..32], addr_bytes[0..20]);
+        value = types.U256.fromBytes(result_bytes);
         try self.stack.push(self.allocator, value);
         self.gas_used += 2;
     }
     
     fn opCaller(self: *EVM) !void {
         var value = types.U256.zero();
-        for (self.context.caller.bytes, 0..) |byte, i| {
-            if (i < 20) value.limbs[0] |= @as(u64, byte) << @intCast((19 - i) * 8);
-        }
+        const caller_bytes = self.context.caller.bytes;
+        var result_bytes = value.toBytes();
+        @memcpy(result_bytes[12..32], caller_bytes[0..20]);
+        value = types.U256.fromBytes(result_bytes);
         try self.stack.push(self.allocator, value);
         self.gas_used += 2;
     }
     
     fn opOrigin(self: *EVM) !void {
         var value = types.U256.zero();
-        for (self.context.origin.bytes, 0..) |byte, i| {
-            if (i < 20) value.limbs[0] |= @as(u64, byte) << @intCast((19 - i) * 8);
-        }
+        const origin_bytes = self.context.origin.bytes;
+        var result_bytes = value.toBytes();
+        @memcpy(result_bytes[12..32], origin_bytes[0..20]);
+        value = types.U256.fromBytes(result_bytes);
         try self.stack.push(self.allocator, value);
         self.gas_used += 2;
     }
@@ -569,9 +616,11 @@ pub const EVM = struct {
         
         const off = offset.limbs[0];
         const len = length.limbs[0];
+        const new_size = off + len;
         
-        if (off + len > self.memory.data.items.len) {
-            try self.memory.data.resize(self.allocator, off + len);
+        // Expand memory if needed
+        if (new_size > self.memory.data.items.len) {
+            try self.memory.data.resize(self.allocator, new_size);
         }
         
         const data = self.memory.data.items[off..off + len];
@@ -580,7 +629,11 @@ pub const EVM = struct {
         
         const result = types.U256.fromBytes(hash);
         try self.stack.push(self.allocator, result);
-        self.gas_used += 30 + 6 * ((len + 31) / 32);
+        
+        // Base cost (30) + word cost (6 per word) + memory expansion cost
+        const word_count = (len + 31) / 32;
+        const mem_cost = self.memoryExpansionCost(new_size);
+        self.gas_used += 30 + 6 * word_count + mem_cost;
     }
     
     // LOG opcodes
@@ -596,9 +649,11 @@ pub const EVM = struct {
         
         const off = offset.limbs[0];
         const len = length.limbs[0];
+        const new_size = off + len;
         
-        if (off + len > self.memory.data.items.len) {
-            try self.memory.data.resize(self.allocator, off + len);
+        // Expand memory if needed
+        if (new_size > self.memory.data.items.len) {
+            try self.memory.data.resize(self.allocator, new_size);
         }
         
         const data = try self.allocator.alloc(u8, len);
@@ -610,7 +665,9 @@ pub const EVM = struct {
             .data = data,
         });
         
-        self.gas_used += 375 + 375 * topic_count + 8 * len;
+        // Base cost + topic cost + data cost + memory expansion cost
+        const mem_cost = self.memoryExpansionCost(new_size);
+        self.gas_used += 375 + 375 * topic_count + 8 * len + mem_cost;
     }
     
     // REVERT opcode
@@ -750,30 +807,98 @@ pub const EVM = struct {
 
     fn opMload(self: *EVM) !void {
         const offset = try self.stack.pop();
+        const off = offset.limbs[0];
+        const new_size = off + 32;
+        
+        // Expand memory if needed
+        if (new_size > self.memory.data.items.len) {
+            try self.memory.data.resize(self.allocator, new_size);
+        }
+        
         const value = try self.memory.load(self.allocator, offset);
         try self.stack.push(self.allocator, value);
-        self.gas_used += 3;
+        
+        // Base cost + memory expansion cost
+        const mem_cost = self.memoryExpansionCost(new_size);
+        self.gas_used += 3 + mem_cost;
     }
 
     fn opMstore(self: *EVM) !void {
         const offset = try self.stack.pop();
         const value = try self.stack.pop();
+        const off = offset.limbs[0];
+        const new_size = off + 32;
+        
+        // Expand memory if needed
+        if (new_size > self.memory.data.items.len) {
+            try self.memory.data.resize(self.allocator, new_size);
+        }
+        
         try self.memory.store(self.allocator, offset, value);
-        self.gas_used += 3;
+        
+        // Base cost + memory expansion cost
+        const mem_cost = self.memoryExpansionCost(new_size);
+        self.gas_used += 3 + mem_cost;
     }
 
     fn opSload(self: *EVM) !void {
         const key = try self.stack.pop();
         const value = try self.storage.load(key);
         try self.stack.push(self.allocator, value);
-        self.gas_used += 200;
+        
+        // EIP-2929: 100 gas for warm access, 2100 for cold
+        if (self.warm_storage.contains(key)) {
+            self.gas_used += 100; // Warm access
+        } else {
+            self.gas_used += 2100; // Cold access
+            try self.warm_storage.put(key, {}); // Mark as warm
+        }
     }
 
     fn opSstore(self: *EVM) !void {
         const key = try self.stack.pop();
-        const value = try self.stack.pop();
-        try self.storage.store(key, value);
-        self.gas_used += 5000;
+        const new_value = try self.stack.pop();
+        const current_value = self.storage.load(key) catch types.U256.zero();
+        
+        // EIP-2200: Complex SSTORE gas rules
+        // Simplified implementation:
+        // - If current == new: 100 (warm) or 2100 (cold)
+        // - If current != 0 and new == 0: refund 4800
+        // - If current == 0 and new != 0: 20000 (cold) or 2900 (warm)
+        // - If current != 0 and new != 0 and current != new: 5000 (warm) or 2900 (cold, but then becomes warm)
+        
+        const is_warm = self.warm_storage.contains(key);
+        
+        if (current_value.eq(new_value)) {
+            // No change
+            self.gas_used += if (is_warm) 100 else 2100;
+        } else if (!current_value.isZero() and new_value.isZero()) {
+            // Delete (refund)
+            if (is_warm) {
+                self.gas_used += 100;
+            } else {
+                self.gas_used += 2100;
+            }
+            // Refund handled separately (not implemented yet)
+        } else if (current_value.isZero() and !new_value.isZero()) {
+            // Set new value
+            if (is_warm) {
+                self.gas_used += 2900;
+            } else {
+                self.gas_used += 20000;
+                try self.warm_storage.put(key, {}); // Mark as warm
+            }
+        } else {
+            // Update existing value
+            if (is_warm) {
+                self.gas_used += 5000;
+            } else {
+                self.gas_used += 2900;
+                try self.warm_storage.put(key, {}); // Mark as warm
+            }
+        }
+        
+        try self.storage.store(key, new_value);
     }
 
     fn opJump(self: *EVM, pc: *usize) !void {

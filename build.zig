@@ -324,4 +324,19 @@ pub fn build(b: *std.Build) void {
     });
     const run_evm_edge_tests = b.addRunArtifact(evm_edge_tests);
     test_step.dependOn(&run_evm_edge_tests.step);
+    
+    // Manual opcode verification tests
+    const manual_opcode_test_mod = b.createModule(.{
+        .root_source_file = b.path("validation/manual_opcode_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    manual_opcode_test_mod.addImport("evm", evm_mod);
+    manual_opcode_test_mod.addImport("types", types_mod);
+    
+    const manual_opcode_tests = b.addTest(.{
+        .root_module = manual_opcode_test_mod,
+    });
+    const run_manual_opcode_tests = b.addRunArtifact(manual_opcode_tests);
+    test_step.dependOn(&run_manual_opcode_tests.step);
 }
