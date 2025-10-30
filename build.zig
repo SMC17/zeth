@@ -23,14 +23,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const evm_mod = b.addModule("evm", .{
-        .root_source_file = b.path("src/evm/evm.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    evm_mod.addImport("types", types_mod);
-    evm_mod.addImport("crypto", crypto_mod);
-
     const state_mod = b.addModule("state", .{
         .root_source_file = b.path("src/state/state.zig"),
         .target = target,
@@ -38,6 +30,15 @@ pub fn build(b: *std.Build) void {
     });
     state_mod.addImport("types", types_mod);
     state_mod.addImport("crypto", crypto_mod);
+
+    const evm_mod = b.addModule("evm", .{
+        .root_source_file = b.path("src/evm/evm.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    evm_mod.addImport("types", types_mod);
+    evm_mod.addImport("crypto", crypto_mod);
+    evm_mod.addImport("state", state_mod);
 
     // Main executable
     const exe_mod = b.createModule(.{

@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("types");
 const crypto = @import("crypto");
+const state = @import("state");
 
 /// Execution context for EVM
 pub const ExecutionContext = struct {
@@ -16,6 +17,7 @@ pub const ExecutionContext = struct {
     block_difficulty: types.U256,
     block_gaslimit: u64,
     chain_id: u64,
+    block_base_fee: ?u64 = null, // EIP-1559 base fee
     
     pub fn default() ExecutionContext {
         return ExecutionContext{
@@ -31,6 +33,7 @@ pub const ExecutionContext = struct {
             .block_difficulty = types.U256.zero(),
             .block_gaslimit = 0,
             .chain_id = 1, // Mainnet
+            .block_base_fee = null,
         };
     }
 };
@@ -49,6 +52,8 @@ pub const EVM = struct {
     warm_storage: std.AutoHashMap(types.U256, void),
     // Return data from last CALL/CREATE/DELEGATECALL (for RETURNDATACOPY)
     return_data: []const u8 = &[_]u8{},
+    // State database for external account lookups (optional)
+    state_db: ?*state.StateDB = null,
 
     pub fn init(allocator: std.mem.Allocator, gas_limit: u64) !EVM {
         return EVM{
@@ -61,6 +66,7 @@ pub const EVM = struct {
             .context = ExecutionContext.default(),
             .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
             .warm_storage = std.AutoHashMap(types.U256, void).init(allocator),
+            .state_db = null,
         };
     }
     
@@ -75,6 +81,22 @@ pub const EVM = struct {
             .context = context,
             .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
             .warm_storage = std.AutoHashMap(types.U256, void).init(allocator),
+            .state_db = null,
+        };
+    }
+    
+    pub fn initWithState(allocator: std.mem.Allocator, gas_limit: u64, context: ExecutionContext, state_db: *state.StateDB) !EVM {
+        return EVM{
+            .allocator = allocator,
+            .gas_limit = gas_limit,
+            .gas_used = 0,
+            .stack = try Stack.init(allocator),
+            .memory = try Memory.init(allocator),
+            .storage = Storage.init(allocator),
+            .context = context,
+            .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
+            .warm_storage = std.AutoHashMap(types.U256, void).init(allocator),
+            .state_db = state_db,
         };
     }
 
@@ -150,6 +172,8 @@ pub const EVM = struct {
             .SDIV => try self.opSdiv(),
             .MOD => try self.opMod(),
             .SMOD => try self.opSmod(),
+            .ADDMOD => try self.opAddmod(),
+            .MULMOD => try self.opMulmod(),
             .EXP => try self.opExp(),
             .SIGNEXTEND => try self.opSignExtend(),
             
@@ -245,6 +269,7 @@ pub const EVM = struct {
             // Memory
             .MLOAD => try self.opMload(),
             .MSTORE => try self.opMstore(),
+            .MSTORE8 => try self.opMstore8(),
             .MSIZE => try self.opMsize(),
             
             // Storage
@@ -275,6 +300,7 @@ pub const EVM = struct {
             .EXTCODEHASH => try self.opExtCodeHash(),
             
             // Block information
+            .BLOCKHASH => try self.opBlockhash(),
             .COINBASE => try self.opCoinbase(),
             .TIMESTAMP => try self.opTimestamp(),
             .NUMBER => try self.opNumber(),
@@ -282,6 +308,7 @@ pub const EVM = struct {
             .GASLIMIT => try self.opGasLimit(),
             .CHAINID => try self.opChainId(),
             .BASEFEE => try self.opBaseFee(),
+            .SELFBALANCE => try self.opSelfBalance(),
             
             // Hashing
             .SHA3 => try self.opSha3(),
@@ -344,6 +371,50 @@ pub const EVM = struct {
         const b = try self.stack.pop(); // second
         try self.stack.push(self.allocator, b.mod(a)); // b % a (reversed!)
         self.gas_used += 5;
+    }
+    
+    fn opAddmod(self: *EVM) !void {
+        // ADDMOD: (a + b) % m
+        // Stack: a, b, m -> result
+        const m = try self.stack.pop();
+        const b = try self.stack.pop();
+        const a = try self.stack.pop();
+        
+        // Handle modulo by zero
+        if (m.isZero()) {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += 8;
+            return;
+        }
+        
+        // Calculate (a + b) mod m
+        const sum = a.add(b);
+        const result = sum.mod(m);
+        
+        try self.stack.push(self.allocator, result);
+        self.gas_used += 8;
+    }
+    
+    fn opMulmod(self: *EVM) !void {
+        // MULMOD: (a * b) % m
+        // Stack: a, b, m -> result
+        const m = try self.stack.pop();
+        const b = try self.stack.pop();
+        const a = try self.stack.pop();
+        
+        // Handle modulo by zero
+        if (m.isZero()) {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += 8;
+            return;
+        }
+        
+        // Calculate (a * b) mod m
+        const product = a.mul(b);
+        const result = product.mod(m);
+        
+        try self.stack.push(self.allocator, result);
+        self.gas_used += 8;
     }
     
     fn opSdiv(self: *EVM) !void {
@@ -876,10 +947,21 @@ pub const EVM = struct {
     fn opBalance(self: *EVM) !void {
         // BALANCE(address): Get balance of account at address
         const address_u256 = try self.stack.pop();
-        _ = address_u256; // TODO: Look up actual balance in state
         
-        // For now, return 0 (no balance tracking yet)
-        try self.stack.push(self.allocator, types.U256.zero());
+        // Extract address from U256 (last 20 bytes)
+        var address_bytes: [20]u8 = undefined;
+        const value_bytes = address_u256.toBytes();
+        @memcpy(&address_bytes, value_bytes[12..32]);
+        const address = types.Address{ .bytes = address_bytes };
+        
+        // Look up balance from state if available
+        if (self.state_db) |db| {
+            const balance = db.getBalance(address) catch types.U256.zero();
+            try self.stack.push(self.allocator, balance);
+        } else {
+            // No state database - return 0
+            try self.stack.push(self.allocator, types.U256.zero());
+        }
         
         // EIP-2929: Cold access charge for first access to account
         // TODO: Track warm account accesses
@@ -889,10 +971,22 @@ pub const EVM = struct {
     fn opExtCodeSize(self: *EVM) !void {
         // EXTCODESIZE(address): Get size of code at address
         const address_u256 = try self.stack.pop();
-        _ = address_u256; // TODO: Look up actual code in state
         
-        // For now, return 0 (no external code tracking yet)
-        try self.stack.push(self.allocator, types.U256.zero());
+        // Extract address from U256
+        var address_bytes: [20]u8 = undefined;
+        const value_bytes = address_u256.toBytes();
+        @memcpy(&address_bytes, value_bytes[12..32]);
+        const address = types.Address{ .bytes = address_bytes };
+        
+        // Look up code size from state if available
+        if (self.state_db) |db| {
+            _ = db.getAccount(address) catch types.Account.empty();
+            // TODO: Get actual code size from account
+            try self.stack.push(self.allocator, types.U256.zero());
+        } else {
+            // No state database - return 0
+            try self.stack.push(self.allocator, types.U256.zero());
+        }
         
         // EIP-2929: Cold access charge for first access to account
         // TODO: Track warm account accesses
@@ -906,9 +1000,13 @@ pub const EVM = struct {
         const code_offset_u256 = try self.stack.pop();
         const length_u256 = try self.stack.pop();
         
-        _ = address_u256; // TODO: Look up actual code in state
-        _ = code_offset_u256; // TODO: Use code offset when copying actual code
+        // Extract address from U256
+        var address_bytes: [20]u8 = undefined;
+        const value_bytes = address_u256.toBytes();
+        @memcpy(&address_bytes, value_bytes[12..32]);
+        _ = types.Address{ .bytes = address_bytes }; // TODO: Use address when copying actual code
         
+        _ = code_offset_u256; // TODO: Use code offset when copying actual code
         const mem_offset = mem_offset_u256.limbs[0];
         const length = length_u256.limbs[0];
         
@@ -923,7 +1021,7 @@ pub const EVM = struct {
             try self.memory.data.resize(self.allocator, new_size);
         }
         
-        // TODO: Copy actual external code
+        // TODO: Copy actual external code from state
         // For now, zero out memory
         if (length > 0) {
             @memset(self.memory.data.items[mem_offset..][0..length], 0);
@@ -938,11 +1036,23 @@ pub const EVM = struct {
     fn opExtCodeHash(self: *EVM) !void {
         // EXTCODEHASH(address): Get hash of code at address (EIP-1052)
         const address_u256 = try self.stack.pop();
-        _ = address_u256; // TODO: Look up actual code in state and hash it
         
-        // For now, return 0 (no external code tracking yet)
-        // In real EVM, returns keccak256(code) or 0 if account doesn't exist
-        try self.stack.push(self.allocator, types.U256.zero());
+        // Extract address from U256
+        var address_bytes: [20]u8 = undefined;
+        const value_bytes = address_u256.toBytes();
+        @memcpy(&address_bytes, value_bytes[12..32]);
+        const address = types.Address{ .bytes = address_bytes };
+        
+        // Look up code hash from state if available
+        if (self.state_db) |db| {
+            _ = db.getAccount(address) catch types.Account.empty();
+            // TODO: Get actual code hash from account
+            // Returns keccak256(code) or 0 if account doesn't exist
+            try self.stack.push(self.allocator, types.U256.zero());
+        } else {
+            // No state database - return 0
+            try self.stack.push(self.allocator, types.U256.zero());
+        }
         
         // EIP-2929: Cold access charge for first access to account
         // TODO: Track warm account accesses
@@ -986,6 +1096,36 @@ pub const EVM = struct {
         const chain_id = types.U256.fromU64(self.context.chain_id);
         try self.stack.push(self.allocator, chain_id);
         self.gas_used += 2;
+    }
+    
+    fn opBlockhash(self: *EVM) !void {
+        // BLOCKHASH: Hash of a given block
+        // Stack: blockNumber -> hash
+        const block_number_u256 = try self.stack.pop();
+        const block_number = block_number_u256.limbs[0];
+        const current_block = self.context.block_number;
+        
+        // Blockhash is only available for blocks within the last 256 blocks
+        // If block_number is outside this range, return 0
+        if (block_number >= current_block or block_number < current_block - 256) {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += 20;
+            return;
+        }
+        
+        // TODO: Look up actual block hash from block history
+        // For now, return zero (will be implemented when we have block storage)
+        try self.stack.push(self.allocator, types.U256.zero());
+        self.gas_used += 20;
+    }
+    
+    fn opSelfBalance(self: *EVM) !void {
+        // SELFBALANCE: Balance of the current account (EIP-1884)
+        // Equivalent to BALANCE(ADDRESS) but cheaper (5 gas vs 100/2100)
+        // TODO: Look up actual balance from state
+        // For now, return 0 (will be implemented when state is connected)
+        try self.stack.push(self.allocator, types.U256.zero());
+        self.gas_used += 5;
     }
     
     fn opBaseFee(self: *EVM) !void {
@@ -1221,6 +1361,28 @@ pub const EVM = struct {
         }
         
         try self.memory.store(self.allocator, offset, value);
+        
+        // Base cost + memory expansion cost
+        const mem_cost = self.memoryExpansionCost(new_size);
+        self.gas_used += 3 + mem_cost;
+    }
+    
+    fn opMstore8(self: *EVM) !void {
+        // MSTORE8: Store single byte at memory offset
+        const offset_u256 = try self.stack.pop();
+        const value_u256 = try self.stack.pop();
+        const offset = offset_u256.limbs[0];
+        const byte_value = @as(u8, @truncate(value_u256.limbs[0]));
+        
+        const new_size = offset + 1;
+        
+        // Expand memory if needed
+        if (new_size > self.memory.data.items.len) {
+            try self.memory.data.resize(self.allocator, new_size);
+        }
+        
+        // Store single byte
+        self.memory.data.items[offset] = byte_value;
         
         // Base cost + memory expansion cost
         const mem_cost = self.memoryExpansionCost(new_size);

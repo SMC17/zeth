@@ -103,8 +103,10 @@ zig build
 
 ## Documentation
 
-- **[Architecture](docs/architecture/ARCHITECTURE.md)](docs/architecture/ARCHITECTURE.md)** - System design and components
+- **[Architecture](docs/architecture/ARCHITECTURE.md)** - System design and components
 - **[EVM Parity Status](docs/architecture/EVM_PARITY_STATUS.md)** - Implementation progress
+- **[Strategic Roadmap](docs/architecture/STRATEGIC_ROADMAP.md)** - Long-term vision and blockchain path
+- **[Implementation Plan](docs/internal/IMPLEMENTATION_PLAN.md)** - Detailed development phases
 - **[Getting Started](docs/development/GETTING_STARTED.md)** - Developer guide
 - **[Contributing](CONTRIBUTING.md)** - How to contribute
 - **[Roadmap](docs/community/PROJECT_ROADMAP.md)** - Project vision and timeline
