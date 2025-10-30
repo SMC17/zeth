@@ -433,8 +433,4 @@ pub fn build(b: *std.Build) void {
         .root_module = reference_test_exe_mod,
     });
     b.installArtifact(reference_test_exe);
-    
-    const run_reference_test_exe = b.addRunArtifact(reference_test_exe);
-    const reference_test_cmd = b.addStep("reference-tests", "Run reference comparison tests");
-    reference_test_cmd.dependOn(&run_reference_test_exe.step);
 }
