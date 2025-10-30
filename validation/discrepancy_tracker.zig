@@ -143,9 +143,6 @@ pub const DiscrepancyTracker = struct {
         
         _ = try file.write(report);
     }
-    
-    // Helper formatReport that works with ArrayList writer
-    fn formatReport(self: *const DiscrepancyTracker, writer: anytype) !void {
 };
 
 const testing = std.testing;
