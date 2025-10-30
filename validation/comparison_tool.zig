@@ -173,7 +173,8 @@ fn formatHex(allocator: std.mem.Allocator, bytes: []const u8) ![]const u8 {
     var result = try std.ArrayList(u8).initCapacity(allocator, bytes.len * 2 + 2);
     defer result.deinit(allocator);
     
-    try result.writer().print("0x", .{});
+    var writer = result.writer(allocator);
+    try writer.print("0x", .{});
     for (bytes) |byte| {
         try result.writer().print("{x:02}", .{byte});
     }
