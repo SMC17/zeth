@@ -46,8 +46,8 @@ pub fn executeWithGeth(allocator: std.mem.Allocator, bytecode: []const u8, calld
 /// Execute bytecode using PyEVM via Python subprocess
 /// PyEVM can execute bytecode directly via Python script
 pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, calldata: []const u8) !ReferenceResult {
-    // Use the pyevm_executor.py script in validation directory
-    const script_path = "validation/pyevm_executor.py";
+    // Use the pyevm_executor_v3.py script in validation directory (simplified direct state)
+    const script_path = "validation/pyevm_executor_v3.py";
     
     // Format bytecode and calldata as hex
     var bytecode_hex = try std.ArrayList(u8).initCapacity(allocator, bytecode.len * 2);
@@ -70,7 +70,7 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
     // Execute Python script
     const python_args = [_][]const u8{ "python3", script_path, bytecode_hex_str, calldata_hex_str };
     
-    var result = std.ChildProcess.exec(.{
+    const result = try std.process.Child.exec(.{
         .allocator = allocator,
         .argv = &python_args,
         .max_output_bytes = 1024 * 1024, // 1MB
@@ -180,7 +180,7 @@ fn hexCharToNibble(c: u8) !u4 {
 /// Check if Geth is available
 pub fn isGethAvailable() bool {
     // Check if geth command is available
-    const result = std.ChildProcess.exec(.{
+    const result = try std.process.Child.exec(.{
         .allocator = std.heap.page_allocator,
         .argv = &.{ "which", "geth" },
         .max_output_bytes = 256,
@@ -201,7 +201,7 @@ pub fn isPyEVMAvailable() bool {
     script_file.close();
     
     // Check if PyEVM is importable
-    const result = std.ChildProcess.exec(.{
+    const result = try std.process.Child.exec(.{
         .allocator = std.heap.page_allocator,
         .argv = &.{ "python3", "-c", "import eth; from eth.vm.forks import BerlinVM" },
         .max_output_bytes = 256,
@@ -221,9 +221,7 @@ test "Reference interfaces: Check availability" {
     std.debug.print("Geth available: {}\n", .{geth_available});
     std.debug.print("PyEVM available: {}\n", .{pyevm_available});
     
-    // Test doesn't require either to be available
-    _ = geth_available;
-    _ = pyevm_available;
+    // Test doesn't require either to be available - values are printed above
 }
 
 test "Reference interfaces: Hex parsing" {

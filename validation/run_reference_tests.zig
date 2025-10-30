@@ -4,6 +4,7 @@ const types = @import("types");
 const comparison = @import("comparison_tool");
 const reference = @import("reference_interfaces");
 const tracker = @import("discrepancy_tracker");
+const test_runner_mod = @import("reference_test_runner");
 
 /// Standalone executable to run reference comparison tests
 /// Usage: zig run validation/run_reference_tests.zig
@@ -34,7 +35,7 @@ pub fn main() !void {
     }
     
     // Run tests
-    var test_runner = comparison.TestRunner.init(allocator);
+    var test_runner = try test_runner_mod.TestRunner.init(allocator);
     defer test_runner.deinit();
     
     std.debug.print("Running critical opcode tests...\n", .{});

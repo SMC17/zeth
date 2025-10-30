@@ -427,6 +427,7 @@ pub fn build(b: *std.Build) void {
     reference_test_exe_mod.addImport("comparison_tool", comparison_test_mod);
     reference_test_exe_mod.addImport("reference_interfaces", reference_interfaces_mod);
     reference_test_exe_mod.addImport("discrepancy_tracker", discrepancy_tracker_mod);
+    reference_test_exe_mod.addImport("reference_test_runner", reference_test_runner_mod);
     
     const reference_test_exe = b.addExecutable(.{
         .name = "run_reference_tests",

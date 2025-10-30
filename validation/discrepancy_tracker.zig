@@ -47,9 +47,9 @@ pub const DiscrepancyTracker = struct {
     discrepancies: std.ArrayList(Discrepancy),
     allocator: std.mem.Allocator,
     
-    pub fn init(allocator: std.mem.Allocator) DiscrepancyTracker {
+    pub fn init(allocator: std.mem.Allocator) !DiscrepancyTracker {
         return DiscrepancyTracker{
-            .discrepancies = std.ArrayList(Discrepancy).init(allocator),
+            .discrepancies = try std.ArrayList(Discrepancy).initCapacity(allocator, 0),
             .allocator = allocator,
         };
     }
@@ -140,7 +140,7 @@ const testing = std.testing;
 
 test "Discrepancy tracker: Basic operations" {
     const testing_allocator = testing.allocator;
-    var tracker = DiscrepancyTracker.init(testing_allocator);
+    var tracker = try DiscrepancyTracker.init(testing_allocator);
     defer tracker.deinit();
     
     try tracker.add("ADD", .gas_cost, "Gas cost differs", "9", "10", &[_]u8{0x01}, &[_]u8{}, .medium);

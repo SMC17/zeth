@@ -16,10 +16,10 @@ pub const TestRunner = struct {
     tests_passed: usize = 0,
     tests_failed: usize = 0,
     
-    pub fn init(allocator: std.mem.Allocator) TestRunner {
+    pub fn init(allocator: std.mem.Allocator) !TestRunner {
         return TestRunner{
             .allocator = allocator,
-            .discrepancy_tracker = tracker.DiscrepancyTracker.init(allocator),
+            .discrepancy_tracker = try tracker.DiscrepancyTracker.init(allocator),
             .tests_run = 0,
             .tests_passed = 0,
             .tests_failed = 0,
@@ -119,7 +119,7 @@ pub const TestRunner = struct {
 
 test "Test runner: Basic functionality" {
     const testing_allocator = testing.allocator;
-    var runner = TestRunner.init(testing_allocator);
+    var runner = try TestRunner.init(testing_allocator);
     defer runner.deinit();
     
     // Run a simple test
@@ -133,7 +133,7 @@ test "Test runner: Basic functionality" {
 // Main test suite - runs all opcodes against reference
 test "Reference comparison: Run all critical tests" {
     const testing_allocator = testing.allocator;
-    var runner = TestRunner.init(testing_allocator);
+    var runner = try TestRunner.init(testing_allocator);
     defer runner.deinit();
     
     // Only run if reference is available
