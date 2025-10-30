@@ -419,6 +419,7 @@ pub const EVM = struct {
     
     fn opSdiv(self: *EVM) !void {
         // Signed division: result = sign(b/a) * abs(b/a)
+        // EVM uses two's complement representation
         const a = try self.stack.pop();
         const b = try self.stack.pop();
         
@@ -429,15 +430,33 @@ pub const EVM = struct {
             return;
         }
         
-        // For simplicity, treat as unsigned for now
-        // TODO: Implement proper signed arithmetic
-        const result = b.div(a);
+        // Check signs
+        const a_negative = types.U256.isSignedNegative(a);
+        const b_negative = types.U256.isSignedNegative(b);
+        
+        // Get absolute values
+        const a_abs = a.signedAbs();
+        const b_abs = b.signedAbs();
+        
+        // Perform unsigned division
+        const abs_result = b_abs.div(a_abs);
+        
+        // Determine sign: negative if signs differ
+        const result_negative = (a_negative != b_negative);
+        
+        // Apply sign if needed
+        const result = if (result_negative and !abs_result.isZero()) 
+            abs_result.signedNegateFast()
+        else
+            abs_result;
+        
         try self.stack.push(self.allocator, result);
         self.gas_used += 5;
     }
     
     fn opSmod(self: *EVM) !void {
         // Signed modulo: result = sign(b) * abs(b) % abs(a)
+        // EVM uses two's complement representation
         const a = try self.stack.pop();
         const b = try self.stack.pop();
         
@@ -448,9 +467,22 @@ pub const EVM = struct {
             return;
         }
         
-        // For simplicity, treat as unsigned for now
-        // TODO: Implement proper signed arithmetic
-        const result = b.mod(a);
+        // Check if b is negative (sign of result)
+        const b_negative = types.U256.isSignedNegative(b);
+        
+        // Get absolute values
+        const a_abs = a.signedAbs();
+        const b_abs = b.signedAbs();
+        
+        // Perform unsigned modulo
+        const abs_result = b_abs.mod(a_abs);
+        
+        // Apply sign of b if result is non-zero
+        const result = if (b_negative and !abs_result.isZero())
+            abs_result.signedNegateFast()
+        else
+            abs_result;
+        
         try self.stack.push(self.allocator, result);
         self.gas_used += 5;
     }
@@ -1122,9 +1154,14 @@ pub const EVM = struct {
     fn opSelfBalance(self: *EVM) !void {
         // SELFBALANCE: Balance of the current account (EIP-1884)
         // Equivalent to BALANCE(ADDRESS) but cheaper (5 gas vs 100/2100)
-        // TODO: Look up actual balance from state
-        // For now, return 0 (will be implemented when state is connected)
-        try self.stack.push(self.allocator, types.U256.zero());
+        // Look up balance from state if available
+        if (self.state_db) |db| {
+            const balance = db.getBalance(self.context.address) catch types.U256.zero();
+            try self.stack.push(self.allocator, balance);
+        } else {
+            // No state database - return 0
+            try self.stack.push(self.allocator, types.U256.zero());
+        }
         self.gas_used += 5;
     }
     

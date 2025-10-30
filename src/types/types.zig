@@ -204,7 +204,63 @@ pub const U256 = struct {
         return self.limbs[0] == 0 and self.limbs[1] == 0 and 
                self.limbs[2] == 0 and self.limbs[3] == 0;
     }
-
+    
+    // Signed arithmetic helpers (two's complement)
+    
+    /// Check if a U256 represents a negative number in two's complement
+    /// Returns true if the MSB (bit 255) is set
+    pub fn isSignedNegative(self: U256) bool {
+        return (self.limbs[3] >> 63) != 0;
+    }
+    
+    /// Get absolute value of signed number (two's complement)
+    pub fn signedAbs(self: U256) U256 {
+        if (self.isSignedNegative()) {
+            // Two's complement negation: flip all bits and add 1
+            var result = U256.zero();
+            result.limbs[0] = ~self.limbs[0];
+            result.limbs[1] = ~self.limbs[1];
+            result.limbs[2] = ~self.limbs[2];
+            result.limbs[3] = ~self.limbs[3];
+            
+            // Add 1
+            var carry: u64 = 1;
+            var i: usize = 0;
+            while (i < 4) {
+                const sum = @addWithOverflow(result.limbs[i], carry);
+                result.limbs[i] = sum[0];
+                carry = if (sum[1] != 0) 1 else 0;
+                if (carry == 0) break;
+                i += 1;
+            }
+            return result;
+        }
+        return self;
+    }
+    
+    /// Negate a signed number (two's complement)
+    pub fn signedNegateFast(self: U256) U256 {
+        if (self.isZero()) return self;
+        // Two's complement: flip all bits and add 1
+        var result = U256.zero();
+        result.limbs[0] = ~self.limbs[0];
+        result.limbs[1] = ~self.limbs[1];
+        result.limbs[2] = ~self.limbs[2];
+        result.limbs[3] = ~self.limbs[3];
+        
+        // Add 1
+        var carry: u64 = 1;
+        var i: usize = 0;
+        while (i < 4) {
+            const sum = @addWithOverflow(result.limbs[i], carry);
+            result.limbs[i] = sum[0];
+            carry = if (sum[1] != 0) 1 else 0;
+            if (carry == 0) break;
+            i += 1;
+        }
+        return result;
+    }
+    
     pub fn format(
         self: U256,
         comptime fmt: []const u8,
