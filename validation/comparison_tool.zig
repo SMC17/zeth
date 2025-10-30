@@ -126,7 +126,8 @@ pub fn formatBytecode(code: []const u8) ![]const u8 {
     defer result.deinit(allocator);
     
     for (code) |byte| {
-        try result.writer().print("{x:02} ", .{byte});
+        var writer = result.writer(allocator);
+        try writer.print("{x:02} ", .{byte});
     }
     
     return try result.toOwnedSlice(allocator);
@@ -176,7 +177,7 @@ fn formatHex(allocator: std.mem.Allocator, bytes: []const u8) ![]const u8 {
     var writer = result.writer(allocator);
     try writer.print("0x", .{});
     for (bytes) |byte| {
-        try result.writer().print("{x:02}", .{byte});
+        try writer.print("{x:02}", .{byte});
     }
     
     return try result.toOwnedSlice(allocator);
