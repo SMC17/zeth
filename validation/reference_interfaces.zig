@@ -53,19 +53,21 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
     // Format bytecode and calldata as hex
     var bytecode_hex = try std.ArrayList(u8).initCapacity(allocator, bytecode.len * 2);
     defer bytecode_hex.deinit(allocator);
+    var writer = bytecode_hex.writer(allocator);
     for (bytecode) |b| {
-        try bytecode_hex.writer().print("{x:02}", .{b});
+        try writer.print("{x:02}", .{b});
     }
     
     var calldata_hex = try std.ArrayList(u8).initCapacity(allocator, calldata.len * 2);
     defer calldata_hex.deinit(allocator);
+    var calldata_writer = calldata_hex.writer(allocator);
     for (calldata) |b| {
-        try calldata_hex.writer().print("{x:02}", .{b});
+        try calldata_writer.print("{x:02}", .{b});
     }
     
-    const bytecode_hex_str = try bytecode_hex.toOwnedSlice();
+    const bytecode_hex_str = try bytecode_hex.toOwnedSlice(allocator);
     defer allocator.free(bytecode_hex_str);
-    const calldata_hex_str = try calldata_hex.toOwnedSlice();
+    const calldata_hex_str = try calldata_hex.toOwnedSlice(allocator);
     defer allocator.free(calldata_hex_str);
     
     // Execute Python script using spawn and read output
@@ -86,33 +88,7 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
         };
     };
     
-    const stdout = child.stdout.?.reader().readAllAlloc(allocator, 1024 * 1024) catch |err| {
-        _ = child.wait() catch {};
-        return ReferenceResult{
-            .success = false,
-            .gas_used = 0,
-            .return_data = try allocator.dupe(u8, &[_]u8{}),
-            .stack = try allocator.alloc(types.U256, 0),
-            .error_message = try std.fmt.allocPrint(allocator, "Failed to read stdout: {}", .{err}),
-            .allocator = allocator,
-        };
-    };
-    defer allocator.free(stdout);
-    
-    const stderr = child.stderr.?.reader().readAllAlloc(allocator, 1024 * 1024) catch |err| {
-        _ = child.wait() catch {};
-        defer allocator.free(stdout);
-        return ReferenceResult{
-            .success = false,
-            .gas_used = 0,
-            .return_data = try allocator.dupe(u8, &[_]u8{}),
-            .stack = try allocator.alloc(types.U256, 0),
-            .error_message = try std.fmt.allocPrint(allocator, "Failed to read stderr: {}", .{err}),
-            .allocator = allocator,
-        };
-    };
-    defer allocator.free(stderr);
-    
+    // Wait for process to complete first
     const term = child.wait() catch |err| {
         return ReferenceResult{
             .success = false,
@@ -123,6 +99,60 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
             .allocator = allocator,
         };
     };
+    
+    // Read stdout and stderr after process completes
+    var stdout_buf: [1024 * 1024]u8 = undefined;
+    var stderr_buf: [1024 * 1024]u8 = undefined;
+    
+    var stdout_list = std.ArrayList(u8).init(allocator);
+    defer stdout_list.deinit(allocator);
+    var stderr_list = std.ArrayList(u8).init(allocator);
+    defer stderr_list.deinit(allocator);
+    
+    if (child.stdout) |stdout_file| {
+        var buf: [4096]u8 = undefined;
+        var reader = stdout_file.reader(&buf);
+        while (true) {
+            const bytes_read = reader.read(&buf) catch |err| {
+                if (err == error.EndOfStream) break;
+                return ReferenceResult{
+                    .success = false,
+                    .gas_used = 0,
+                    .return_data = try allocator.dupe(u8, &[_]u8{}),
+                    .stack = try allocator.alloc(types.U256, 0),
+                    .error_message = try std.fmt.allocPrint(allocator, "Failed to read stdout: {}", .{err}),
+                    .allocator = allocator,
+                };
+            };
+            if (bytes_read == 0) break;
+            try stdout_list.appendSlice(allocator, buf[0..bytes_read]);
+        }
+    }
+    
+    if (child.stderr) |stderr_file| {
+        var buf: [4096]u8 = undefined;
+        var reader = stderr_file.reader(&buf);
+        while (true) {
+            const bytes_read = reader.read(&buf) catch |err| {
+                if (err == error.EndOfStream) break;
+                return ReferenceResult{
+                    .success = false,
+                    .gas_used = 0,
+                    .return_data = try allocator.dupe(u8, &[_]u8{}),
+                    .stack = try allocator.alloc(types.U256, 0),
+                    .error_message = try std.fmt.allocPrint(allocator, "Failed to read stderr: {}", .{err}),
+                    .allocator = allocator,
+                };
+            };
+            if (bytes_read == 0) break;
+            try stderr_list.appendSlice(allocator, buf[0..bytes_read]);
+        }
+    }
+    
+    const stdout = try stdout_list.toOwnedSlice(allocator);
+    defer allocator.free(stdout);
+    const stderr = try stderr_list.toOwnedSlice(allocator);
+    defer allocator.free(stderr);
     
     const result = struct {
         stdout: []const u8,
@@ -234,8 +264,24 @@ pub fn isGethAvailable() bool {
     child.spawn() catch return false;
     
     const term = child.wait() catch return false;
-    _ = child.stdout.?.reader().readAllAlloc(std.heap.page_allocator, 256) catch return false;
-    _ = child.stderr.?.reader().readAllAlloc(std.heap.page_allocator, 256) catch return false;
+    
+    // Drain stdout/stderr
+    if (child.stdout) |stdout_file| {
+        var buf: [256]u8 = undefined;
+        var reader = stdout_file.reader(&buf);
+        while (true) {
+            const bytes_read = reader.read(&buf) catch break;
+            if (bytes_read == 0) break;
+        }
+    }
+    if (child.stderr) |stderr_file| {
+        var buf: [256]u8 = undefined;
+        var reader = stderr_file.reader(&buf);
+        while (true) {
+            const bytes_read = reader.read(&buf) catch break;
+            if (bytes_read == 0) break;
+        }
+    }
     
     return term == .Exited and term.Exited == 0;
 }
@@ -258,8 +304,24 @@ pub fn isPyEVMAvailable() bool {
     child.spawn() catch return false;
     
     const term = child.wait() catch return false;
-    _ = child.stdout.?.reader().readAllAlloc(std.heap.page_allocator, 256) catch return false;
-    _ = child.stderr.?.reader().readAllAlloc(std.heap.page_allocator, 256) catch return false;
+    
+    // Drain stdout/stderr
+    if (child.stdout) |stdout_file| {
+        var buf: [256]u8 = undefined;
+        var reader = stdout_file.reader(&buf);
+        while (true) {
+            const bytes_read = reader.read(&buf) catch break;
+            if (bytes_read == 0) break;
+        }
+    }
+    if (child.stderr) |stderr_file| {
+        var buf: [256]u8 = undefined;
+        var reader = stderr_file.reader(&buf);
+        while (true) {
+            const bytes_read = reader.read(&buf) catch break;
+            if (bytes_read == 0) break;
+        }
+    }
     
     return term == .Exited and term.Exited == 0;
 }
