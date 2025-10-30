@@ -130,9 +130,9 @@ pub const DiscrepancyTracker = struct {
         var file = try std.fs.cwd().createFile(file_path, .{});
         defer file.close();
         
-        var buffered = std.io.bufferedWriter(file.writer());
-        try self.formatReport(buffered.writer());
-        try buffered.flush();
+        var buf: [4096]u8 = undefined;
+        var writer = file.writer(&buf);
+        try self.formatReport(writer);
     }
 };
 

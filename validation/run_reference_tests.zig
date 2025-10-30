@@ -53,7 +53,7 @@ pub fn main() !void {
         
         // Try reference if available
         if (pyevm_available) {
-            const ref_result = reference.executeWithPyEVM(allocator, test_case.bytecode, test_case.calldata) catch |err| {
+            var ref_result = reference.executeWithPyEVM(allocator, test_case.bytecode, test_case.calldata) catch |err| {
                 std.debug.print("ERROR (reference failed: {})\n", .{err});
                 continue;
             };

@@ -125,8 +125,8 @@ pub fn formatBytecode(code: []const u8) ![]const u8 {
     var result = try std.ArrayList(u8).initCapacity(allocator, code.len * 3);
     defer result.deinit(allocator);
     
+    var writer = result.writer(allocator);
     for (code) |byte| {
-        var writer = result.writer(allocator);
         try writer.print("{x:02} ", .{byte});
     }
     
