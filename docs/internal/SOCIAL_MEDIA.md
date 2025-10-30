@@ -4,11 +4,11 @@
 
 ### Twitter/X Post (Launch)
 ```
-🚀 Introducing Zeth: Ethereum implementation in @ziglang
+ Introducing Zeth: Ethereum implementation in @ziglang
 
 Building the most advanced, performant & secure #Ethereum client in Zig.
 
-Currently: 1,351 LOC, 14 tests ✅
+Currently: 1,351 LOC, 14 tests 
 Next: Full EVM, networking, consensus
 
 Open source, community-driven, transparent about challenges.
@@ -204,30 +204,30 @@ If you're interested in either Zig or blockchain, take a look!
 
 ### #announcements channel
 ```
-🎉 Announcing Zeth - Ethereum in Zig! 🎉
+ Announcing Zeth - Ethereum in Zig! 
 
 We're building an Ethereum protocol implementation in Zig, and we want YOU to be part of it!
 
-📊 Current Status:
-✅ 1,351 lines of Zig code
-✅ Core types & RLP encoding
-✅ Basic EVM (15 opcodes)
-✅ 14 passing tests
+ Current Status:
+ 1,351 lines of Zig code
+ Core types & RLP encoding
+ Basic EVM (15 opcodes)
+ 14 passing tests
 
-🚧 What We Need:
+ What We Need:
 • Cryptography (Keccak-256, secp256k1)
 • EVM opcodes (135+ more)
 • Networking (DevP2P)
 • Testing & documentation
 
-🔗 Links:
+ Links:
 • GitHub: https://github.com/SMC17/eth-zig
 • README: Quick overview
 • GOALS.md: Honest assessment
 • ROADMAP.md: Where we're going
 • CONTRIBUTING.md: How to help
 
-💬 Join the Discussion:
+ Join the Discussion:
 We're building in public and value transparency. This is early, it's hard, and we need contributors.
 
 Whether you're a Zig expert, Ethereum developer, or just curious - all are welcome!

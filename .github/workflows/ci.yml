@@ -50,7 +50,11 @@ jobs:
         version: 0.15.1
     
     - name: Check Formatting
-      run: zig fmt --check . || (echo "Code not formatted. Run: zig fmt ." && exit 1)
+      run: |
+        if ! zig fmt --check .; then
+          echo "Code not formatted. Run: zig fmt ."
+          exit 1
+        fi
     
     - name: Ast Check
       run: find src validation examples -name "*.zig" -exec zig ast-check {} \; || true

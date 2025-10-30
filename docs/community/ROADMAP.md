@@ -12,7 +12,7 @@
 **Tests**: 14 passing
 **Zig Version**: 0.15.1
 
-### What Works Today ✅
+### What Works Today 
 - Core types (Address, Hash, U256, Transaction, Block)
 - RLP encoding/decoding
 - Basic EVM (~15 opcodes)
@@ -20,7 +20,7 @@
 - Merkle Patricia Trie (basic)
 - Comprehensive test suite
 
-### What's Missing ⚠️
+### What's Missing 
 - Full cryptography (proper Keccak-256, secp256k1)
 - Complete EVM (135+ more opcodes)
 - Networking layer
@@ -187,7 +187,7 @@
 - **Issues**: #36, #37, #38
 
 #### 5.3 EIP Support
-- [ ] EIP-1559 (dynamic fees) ✅ (in progress)
+- [ ] EIP-1559 (dynamic fees)  (in progress)
 - [ ] EIP-2930 (access lists)
 - [ ] EIP-4844 (proto-danksharding)
 - [ ] EIP-4895 (beacon chain withdrawals)
@@ -226,7 +226,7 @@
 ## Success Metrics
 
 ### Short-term (2025)
-- ✅ 14 tests passing (achieved)
+-  14 tests passing (achieved)
 - [ ] 500+ tests passing
 - [ ] Sync Sepolia testnet
 - [ ] 10+ regular contributors
@@ -316,7 +316,7 @@ We follow [Semantic Versioning](https://semver.org/):
 - **Patch**: Bug fixes
 
 ### Planned Releases
-- **v0.1.0** (Jan 2025): Foundation ✅
+- **v0.1.0** (Jan 2025): Foundation 
 - **v0.2.0** (Apr 2025): Complete EVM
 - **v0.3.0** (Jul 2025): Network sync
 - **v0.4.0** (Oct 2025): Full node
@@ -334,7 +334,7 @@ We follow [Semantic Versioning](https://semver.org/):
 
 ---
 
-**Let's build the future of Ethereum infrastructure together!** 🚀
+**Let's build the future of Ethereum infrastructure together!** 
 
 *Last updated: October 29, 2025*
 

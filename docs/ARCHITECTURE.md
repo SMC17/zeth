@@ -54,19 +54,19 @@ Zeth is a production-grade Ethereum Virtual Machine implementation in Zig, desig
 
 ## Current Status
 
-### ✅ Complete
+###  Complete
 - RLP encoding/decoding (validated)
 - Core EVM opcodes (80+)
 - Basic state management
 - Validation framework
 
-### 🚧 In Progress
+###  In Progress
 - EVM opcode validation against Ethereum tests
 - Gas cost verification
 - Complete state tree implementation
 - Advanced opcodes (CALL variants, CREATE2)
 
-### 📋 Planned
+###  Planned
 - JSON-RPC interface
 - Full blockchain state management
 - Network layer (devp2p)

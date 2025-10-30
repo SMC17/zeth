@@ -1,32 +1,32 @@
 # Week 3 Status: Reference Comparison Framework Complete
 
 **Date**: Week 3-4  
-**Status**: ✅ Framework Complete, Ready for PyEVM Setup  
+**Status**:  Framework Complete, Ready for PyEVM Setup  
 **Goal**: Test 50+ opcodes, achieve >80% match rate
 
 ---
 
-## ✅ **COMPLETED**
+##  **COMPLETED**
 
-### **1. Reference Implementation Framework** ✅
+### **1. Reference Implementation Framework** 
 - **PyEVM Interface**: Complete with Python executor script
 - **Geth Interface**: Placeholder ready for future implementation
 - **JSON Communication**: Structured data exchange
 - **Error Handling**: Graceful degradation when reference unavailable
 
-### **2. Discrepancy Tracking** ✅
+### **2. Discrepancy Tracking** 
 - **Severity Levels**: Critical, High, Medium, Low
 - **Categorization**: By type (gas_cost, stack_state, etc.)
 - **Reporting**: Automatic file generation
 - **Tracking**: All discrepancies logged with context
 
-### **3. Test Runner** ✅
+### **3. Test Runner** 
 - **Automated Comparison**: Executes on both our EVM and reference
 - **Match Rate Calculation**: Automatic percentage calculation
 - **Report Generation**: Saves to `/tmp/zeth_discrepancies.txt`
 - **13 Critical Test Cases**: Ready to expand to 50+
 
-### **4. PyEVM Executor Script** ✅
+### **4. PyEVM Executor Script** 
 - **Python Script**: `validation/pyevm_executor.py`
 - **BerlinVM Fork**: Supports EIP-2929, EIP-2200
 - **JSON Output**: Structured result format
@@ -34,7 +34,7 @@
 
 ---
 
-## 📋 **NEXT STEPS (User Action Required)**
+##  **NEXT STEPS (User Action Required)**
 
 ### **Step 1: Install PyEVM**
 ```bash
@@ -70,7 +70,7 @@ cat /tmp/zeth_discrepancies.txt
 
 ---
 
-## 📊 **CURRENT CAPABILITIES**
+##  **CURRENT CAPABILITIES**
 
 ### **Test Coverage Ready**
 - **13 critical opcodes** defined
@@ -83,16 +83,16 @@ cat /tmp/zeth_discrepancies.txt
   - Stack operations
 
 ### **Comparison Features**
-- ✅ Gas cost comparison (with variance tolerance)
-- ✅ Execution success/failure
-- ✅ Return data comparison
-- ✅ Stack state comparison (framework ready)
-- ✅ Memory state comparison (framework ready)
-- ✅ Storage state comparison (framework ready)
+-  Gas cost comparison (with variance tolerance)
+-  Execution success/failure
+-  Return data comparison
+-  Stack state comparison (framework ready)
+-  Memory state comparison (framework ready)
+-  Storage state comparison (framework ready)
 
 ---
 
-## 🎯 **EXPECTED RESULTS**
+##  **EXPECTED RESULTS**
 
 ### **Initial Run** (Without Fixes)
 - **Match Rate**: ~60-80% (depending on implementation maturity)
@@ -107,7 +107,7 @@ cat /tmp/zeth_discrepancies.txt
 
 ---
 
-## 💡 **USAGE**
+##  **USAGE**
 
 ### **Run Tests Without Reference** (Still Validates Our EVM)
 ```bash
@@ -129,16 +129,16 @@ const geth_available = reference.isGethAvailable();
 
 ---
 
-## 📈 **METRICS**
+##  **METRICS**
 
 - **Framework LOC**: ~1,500 lines
 - **Test Cases**: 13 (expandable to 50+)
 - **Components**: 6 modules
-- **Status**: ✅ Complete and tested
+- **Status**:  Complete and tested
 
 ---
 
-## 🔧 **TROUBLESHOOTING**
+##  **TROUBLESHOOTING**
 
 ### **PyEVM Installation Issues**
 See `validation/SETUP_PYEVM.md` for detailed instructions.
@@ -154,7 +154,7 @@ See `validation/SETUP_PYEVM.md` for detailed instructions.
 
 ---
 
-**Week 3 Status**: ✅ Framework Complete  
+**Week 3 Status**:  Framework Complete  
 **Next**: Install PyEVM and run comparison tests  
 **Target**: >80% match rate with reference implementations
 

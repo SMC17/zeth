@@ -5,7 +5,7 @@
 
 ---
 
-## ✅ What We Actually Tested
+##  What We Actually Tested
 
 ### RLP Encoding Tests
 - **Tested**: 28 encoding tests from rlptest.json
@@ -14,44 +14,44 @@
 
 ---
 
-## ❌ What We HAVEN'T Tested Yet
+##  What We HAVEN'T Tested Yet
 
-### 1. RLP Decoding ❌
+### 1. RLP Decoding 
 - **Tests Available**: Same 28 tests can be decoded
 - **Our Status**: NOT TESTED
 - **Risk**: Our decoder might be wrong
 
-### 2. Invalid RLP Rejection ❌
+### 2. Invalid RLP Rejection 
 - **Tests Available**: invalidRLPTest.json  
 - **Our Status**: NOT TESTED
 - **Risk**: We might accept malformed RLP
 
-### 3. Random RLP Tests ❌
+### 3. Random RLP Tests 
 - **Tests Available**: RandomRLPTests/
 - **Our Status**: NOT TESTED
 - **Risk**: Edge cases not covered
 
-### 4. Large Integer Support in Core RLP ❌
+### 4. Large Integer Support in Core RLP 
 - **Issue**: Validator uses big int parsing, but our RLP encoder (encodeU64) only handles u64
 - **Our Status**: WORKAROUND in validator, NOT FIXED in core
 - **Risk**: Can't actually encode large integers in production
 
 ---
 
-## 🚨 THE PROBLEM
+##  THE PROBLEM
 
 ### What We Did:
-✅ Made the VALIDATOR handle large integers  
-❌ Did NOT fix the actual RLP encoder
+ Made the VALIDATOR handle large integers  
+ Did NOT fix the actual RLP encoder
 
 ### What This Means:
-- Validator passes Ethereum tests ✅
-- But our RLP encoder still can't encode large integers ❌
+- Validator passes Ethereum tests 
+- But our RLP encoder still can't encode large integers 
 - **We fooled ourselves**
 
 ---
 
-## 🎯 What ACTUALLY Needs to Be Done for Week 1
+##  What ACTUALLY Needs to Be Done for Week 1
 
 ### Critical (Must Complete)
 1. [ ] Add RLP decoding validation (test decode path)
@@ -61,7 +61,7 @@
 5. [ ] Verify round-trip: encode → decode → matches
 
 ### Validation Criteria
-- [ ] 28/28 encoding tests PASS ✅ (done)
+- [ ] 28/28 encoding tests PASS  (done)
 - [ ] 28/28 decoding tests PASS (not done)
 - [ ] All invalid RLP tests correctly rejected (not done)
 - [ ] Random RLP tests pass (not done)
@@ -69,21 +69,21 @@
 
 ---
 
-## 📊 Real Week 1 Status
+##  Real Week 1 Status
 
 | Test Category | Available | Tested | Passed | Status |
 |---------------|-----------|--------|--------|--------|
-| RLP Encoding | 28 | 28 | 28 | ✅ DONE |
-| RLP Decoding | 28 | 0 | 0 | ❌ NOT TESTED |
-| Invalid RLP | ~20 | 0 | 0 | ❌ NOT TESTED |
-| Random RLP | ~100 | 0 | 0 | ❌ NOT TESTED |
-| Large Integers | N/A | Manual | Workaround | ⚠️ NOT FIXED |
+| RLP Encoding | 28 | 28 | 28 |  DONE |
+| RLP Decoding | 28 | 0 | 0 |  NOT TESTED |
+| Invalid RLP | ~20 | 0 | 0 |  NOT TESTED |
+| Random RLP | ~100 | 0 | 0 |  NOT TESTED |
+| Large Integers | N/A | Manual | Workaround |  NOT FIXED |
 
 **Real Progress**: 25% of Week 1 complete
 
 ---
 
-## 🔍 Critical Issues Found
+##  Critical Issues Found
 
 ### Issue #1: RLP Encoder Limited to u64
 **Status**: NOT FIXED  
@@ -106,24 +106,24 @@
 
 ---
 
-## 🎯 Honest Assessment
+##  Honest Assessment
 
 ### What We Can Say:
-✅ "RLP encoding passes 28/28 Ethereum tests"
+ "RLP encoding passes 28/28 Ethereum tests"
 
 ### What We CANNOT Say:
-❌ "RLP is fully validated"  
-❌ "RLP is complete"  
-❌ "Week 1 is done"
+ "RLP is fully validated"  
+ "RLP is complete"  
+ "Week 1 is done"
 
 ---
 
-## 📋 Revised Week 1 Plan
+##  Revised Week 1 Plan
 
 ### Day 1 (Done):
-- ✅ Set up validation framework
-- ✅ Run encoding tests
-- ✅ 28/28 pass (with validator workaround)
+-  Set up validation framework
+-  Run encoding tests
+-  28/28 pass (with validator workaround)
 
 ### Day 2 (Now):
 - [ ] Fix RLP encoder to handle large integers natively
@@ -148,7 +148,7 @@
 
 ---
 
-## 💡 The Learning
+##  The Learning
 
 **Moving fast is good. Claiming completion prematurely is bad.**
 
@@ -159,7 +159,7 @@ Big difference.
 
 ---
 
-## 🔥 Action Items (Right Now)
+##  Action Items (Right Now)
 
 1. Add `encodeBigInt` to RLP encoder
 2. Test RLP decoder against Ethereum

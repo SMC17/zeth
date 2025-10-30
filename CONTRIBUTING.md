@@ -185,4 +185,4 @@ Contributors will be:
 - Credited in release notes
 - Acknowledged in documentation
 
-Thank you for contributing to Zeth! 🎉
+Thank you for contributing to Zeth!

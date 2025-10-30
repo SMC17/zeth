@@ -74,6 +74,6 @@ pub fn main() !void {
     std.debug.print("  Stack operations complete!\n", .{});
     std.debug.print("  Gas used: {}\n\n", .{vm.gas_used});
     
-    std.debug.print("✅ Counter contract works perfectly!\n", .{});
+    std.debug.print("Counter contract works perfectly!\n", .{});
 }
 

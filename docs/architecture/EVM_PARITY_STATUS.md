@@ -5,12 +5,12 @@
 
 ## Opcode Implementation Status
 
-### ✅ Fully Implemented & Validated (11/256)
+###  Fully Implemented & Validated (11/256)
 - Arithmetic: ADD, MUL, SUB, DIV, MOD, EXP
 - Comparison: LT, GT, EQ, ISZERO
 - Storage: SLOAD, SSTORE (with EIP-2929 warm/cold)
 
-### ✅ Implemented, Awaiting Validation (~70/256)
+###  Implemented, Awaiting Validation (~70/256)
 - All PUSH operations (PUSH1-PUSH32)
 - All DUP operations (DUP1-DUP16)
 - All SWAP operations (SWAP1-SWAP16)
@@ -22,12 +22,12 @@
 - Bitwise: AND, OR, XOR, NOT, SHL, SHR
 - System: CALL, CREATE, REVERT, SELFDESTRUCT, STATICCALL, DELEGATECALL, CREATE2
 
-### ⚠️ Partially Implemented (~5/256)
+###  Partially Implemented (~5/256)
 - CALL, CREATE, DELEGATECALL, STATICCALL: Basic structure, needs full validation
 - EXP: Implemented but gas cost needs verification
 - SHA3: Implemented, needs validation
 
-### ❌ Not Yet Implemented (~170/256)
+###  Not Yet Implemented (~170/256)
 - Signed operations: SDIV, SMOD, SIGNEXTEND
 - Comparison: SLT, SGT
 - Bitwise: BYTE, SAR
@@ -40,24 +40,24 @@
 ## Validation Progress
 
 ### Reference Implementation Comparison
-- **PyEVM**: ✅ Integrated, 11/11 critical tests passing
-- **Geth**: ⏳ Setup pending
+- **PyEVM**:  Integrated, 11/11 critical tests passing
+- **Geth**:  Setup pending
 
 ### Test Coverage
 - **Internal Tests**: 66+ tests, 100% passing
 - **Ethereum RLP Tests**: 82/83 passing (98.8%)
-- **Ethereum EVM Tests**: ⏳ Not yet run (requires full infrastructure)
+- **Ethereum EVM Tests**:  Not yet run (requires full infrastructure)
 - **Reference Comparison**: 11 critical opcodes validated
 
 ## Gas Cost Verification
 
-### ✅ Verified
+###  Verified
 - Basic arithmetic: ADD (3), MUL (5), DIV (5), MOD (5)
 - Comparison: LT (3), GT (3), EQ (3)
 - Storage: SLOAD (100 warm / 2100 cold), SSTORE (with EIP-2929)
 - Push operations: 3 gas each
 
-### ⚠️ Needs Verification
+###  Needs Verification
 - EXP: Complex gas calculation
 - Memory expansion costs
 - CALL/CREATE operation costs
@@ -65,13 +65,13 @@
 
 ## Priority for Full Parity
 
-### Phase 1: Core Operations (Weeks 1-2) ✅
-- ✅ Basic arithmetic and comparison
-- ✅ Stack operations
-- ✅ Memory and storage basics
-- ✅ Flow control
+### Phase 1: Core Operations (Weeks 1-2) 
+-  Basic arithmetic and comparison
+-  Stack operations
+-  Memory and storage basics
+-  Flow control
 
-### Phase 2: Advanced Operations (Weeks 3-4) ⏳
+### Phase 2: Advanced Operations (Weeks 3-4) 
 - Copy operations (CALLDATACOPY, CODECOPY, etc.)
 - Signed arithmetic (SDIV, SMOD, SIGNEXTEND)
 - External account operations (BALANCE, EXTCODESIZE, etc.)

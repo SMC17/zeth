@@ -140,6 +140,6 @@ pub fn main() !void {
         std.debug.print("  Gas used: {}\n\n", .{vm.gas_used});
     }
     
-    std.debug.print("✅ All arithmetic operations work perfectly!\n", .{});
+    std.debug.print("All arithmetic operations work perfectly!\n", .{});
 }
 

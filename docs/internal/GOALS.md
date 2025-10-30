@@ -2,13 +2,13 @@
 
 ## Where We Are Today (October 29, 2025)
 
-### The Reality Check 💯
+### The Reality Check 
 
 **We have 1,351 lines of Zig code and 14 passing tests.** That's it.
 
 Let's be brutally honest about what we've accomplished and what lies ahead:
 
-### What We Actually Have ✅
+### What We Actually Have 
 - Basic type definitions (Address, Hash, U256)
 - Simple RLP encoder/decoder (works for basic cases)
 - Stub EVM with ~15 opcodes (can add two numbers, that's about it)
@@ -16,7 +16,7 @@ Let's be brutally honest about what we've accomplished and what lies ahead:
 - Test coverage for what we've built
 - Clean code structure
 
-### What We're Missing (The Hard Parts) ❌
+### What We're Missing (The Hard Parts) 
 
 #### 1. Cryptography (CRITICAL)
 - **Current**: Using SHA3 as a placeholder for Keccak-256 (WRONG!)
@@ -256,7 +256,7 @@ Priorities:
 
 This is a multi-year journey. We have a long way to go. But with your help, we can build something remarkable.
 
-Are you in? 🚀
+Are you in? 
 
 ---
 

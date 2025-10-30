@@ -38,7 +38,7 @@ pub fn main() !void {
         // These should all have "INVALID" as input
         const in_value = test_case.get("in").?.string;
         if (!std.mem.eql(u8, in_value, "INVALID")) {
-            std.debug.print("⚠️  Test {s} doesn't have INVALID marker\n", .{test_name});
+            std.debug.print("  Test {s} doesn't have INVALID marker\n", .{test_name});
             continue;
         }
         
@@ -47,7 +47,7 @@ pub fn main() !void {
         
         // Handle malformed hex safely
         if (out_hex.len < 2) {
-            std.debug.print("⚠️  SKIP: {s} - malformed hex string\n", .{test_name});
+            std.debug.print("  SKIP: {s} - malformed hex string\n", .{test_name});
             continue;
         }
         
@@ -56,7 +56,7 @@ pub fn main() !void {
         const malformed = hexToBytes(allocator, hex_data) catch |err| {
             correctly_rejected += 1;
             if (correctly_rejected <= 5) {
-                std.debug.print("✅ PASS: {s} - invalid hex rejected ({s})\n", .{test_name, @errorName(err)});
+                std.debug.print(" PASS: {s} - invalid hex rejected ({s})\n", .{test_name, @errorName(err)});
             }
             continue;
         };
@@ -68,7 +68,7 @@ pub fn main() !void {
         if (decode_result) |decoded| {
             // BAD: We accepted invalid RLP
             incorrectly_accepted += 1;
-            std.debug.print("❌ FAIL: {s} - accepted invalid RLP\n", .{test_name});
+            std.debug.print(" FAIL: {s} - accepted invalid RLP\n", .{test_name});
             
             // Clean up
             freeDecoded(allocator, decoded);
@@ -76,7 +76,7 @@ pub fn main() !void {
             // GOOD: We correctly rejected it
             correctly_rejected += 1;
             if (correctly_rejected <= 5) {
-                std.debug.print("✅ PASS: {s} - correctly rejected ({s})\n", .{test_name, @errorName(err)});
+                std.debug.print(" PASS: {s} - correctly rejected ({s})\n", .{test_name, @errorName(err)});
             }
         }
     }
@@ -87,10 +87,10 @@ pub fn main() !void {
     std.debug.print("Incorrectly Accepted: {} ({d:.1}%)\n", .{incorrectly_accepted, @as(f64, @floatFromInt(incorrectly_accepted)) / @as(f64, @floatFromInt(total)) * 100});
     
     if (correctly_rejected == total) {
-        std.debug.print("\n🎉 ALL INVALID RLP CORRECTLY REJECTED!\n", .{});
+        std.debug.print("\n ALL INVALID RLP CORRECTLY REJECTED!\n", .{});
         std.debug.print("No crashes, no false positives. Security validated.\n", .{});
     } else {
-        std.debug.print("\n⚠️  We accept some invalid RLP. Security issue.\n", .{});
+        std.debug.print("\n  We accept some invalid RLP. Security issue.\n", .{});
     }
 }
 

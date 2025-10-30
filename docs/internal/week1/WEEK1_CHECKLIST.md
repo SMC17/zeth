@@ -6,67 +6,67 @@
 
 ---
 
-## 📋 Completion Criteria
+##  Completion Criteria
 
 Week 1 is ONLY complete when ALL boxes are checked:
 
-### RLP Encoding ✅
+### RLP Encoding 
 - [x] Run all encoding tests from rlptest.json
 - [x] 28/28 tests passing
 - [x] Validated against Ethereum ground truth
 
-**Status**: ✅ COMPLETE (100% pass rate)
+**Status**:  COMPLETE (100% pass rate)
 
-### RLP Decoding ❌
+### RLP Decoding 
 - [ ] Test decoder against all 28 test cases
 - [ ] Verify decode(encode(x)) == x for all cases
 - [ ] Ensure round-trip works
 
-**Status**: ❌ NOT STARTED  
+**Status**:  NOT STARTED  
 **ETA**: 1 day
 
-### Invalid RLP Handling ❌
+### Invalid RLP Handling 
 - [ ] Test against invalidRLPTest.json
 - [ ] Verify malformed RLP is rejected
 - [ ] No crashes on bad input
 - [ ] Proper error messages
 
-**Status**: ❌ NOT STARTED  
+**Status**:  NOT STARTED  
 **ETA**: 1 day
 
-### Random RLP Tests ❌
+### Random RLP Tests 
 - [ ] Run RandomRLPTests
 - [ ] Handle edge cases
 - [ ] Fix any bugs found
 
-**Status**: ❌ NOT STARTED  
+**Status**:  NOT STARTED  
 **ETA**: 1-2 days
 
-### Large Integer Support ❌
+### Large Integer Support 
 - [ ] Add encodeBigInt function to core RLP
 - [ ] Support arbitrary precision integers
 - [ ] Not just in validator - in actual implementation
 
-**Status**: ⚠️ WORKAROUND ONLY  
+**Status**:  WORKAROUND ONLY  
 **ETA**: 1-2 days
 
 ---
 
-## 📊 Current Progress
+##  Current Progress
 
 | Task | Status | Tests | Pass Rate |
 |------|--------|-------|-----------|
-| Encoding | ✅ Done | 28/28 | 100% |
-| Decoding | ❌ Not started | 0/28 | 0% |
-| Invalid RLP | ❌ Not started | 0/~20 | 0% |
-| Random RLP | ❌ Not started | 0/~100 | 0% |
-| Big Int Support | ⚠️ Partial | N/A | 50% |
+| Encoding |  Done | 28/28 | 100% |
+| Decoding |  Not started | 0/28 | 0% |
+| Invalid RLP |  Not started | 0/~20 | 0% |
+| Random RLP |  Not started | 0/~100 | 0% |
+| Big Int Support |  Partial | N/A | 50% |
 
 **Week 1 Completion**: ~25%
 
 ---
 
-## 🚨 Reality Check
+##  Reality Check
 
 ### What We Claimed:
 "Week 1 complete - RLP validated"
@@ -81,7 +81,7 @@ Big integers: Workaround only"
 
 ---
 
-## 🎯 Remaining Work for Week 1
+##  Remaining Work for Week 1
 
 ### Day 2 (Today):
 1. Build RLP decode validator
@@ -109,7 +109,7 @@ Big integers: Workaround only"
 
 ---
 
-## 📝 Validation Report Template
+##  Validation Report Template
 
 ```
 RLP Validation Report - Week 1
@@ -146,7 +146,7 @@ Overall RLP Validation: TBD%
 
 ---
 
-## 💎 Why This Matters
+##  Why This Matters
 
 ### Sloppy Approach:
 - Test encoding only
@@ -155,7 +155,7 @@ Overall RLP Validation: TBD%
 - Look stupid later
 
 ### Professional Approach:
-- Test encoding ✅
+- Test encoding 
 - Test decoding
 - Test invalid input
 - Test edge cases
@@ -163,7 +163,7 @@ Overall RLP Validation: TBD%
 
 ---
 
-## 🔥 The Standard
+##  The Standard
 
 **We don't move to Week 2 until Week 1 is ACTUALLY complete.**
 

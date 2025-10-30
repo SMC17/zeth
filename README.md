@@ -9,19 +9,19 @@
 
 ---
 
-## 🎯 Vision
+## Vision
 
 Zeth aims to be:
 
-- 📚 **Educational**: Learn Zig and EVM through clear, well-documented code
-- ✅ **Validated**: Tested against Ethereum's official test suite
-- 🔧 **Extensible**: Modular design for research and development
-- 🏗️ **Foundation**: Base layer for Ethereum ecosystem tools in Zig
-- 🌐 **Bridge**: Connect Zig and Ethereum developer communities
+- **Educational**: Learn Zig and EVM through clear, well-documented code
+- **Validated**: Tested against Ethereum's official test suite
+- **Extensible**: Modular design for research and development
+- **Foundation**: Base layer for Ethereum ecosystem tools in Zig
+- **Bridge**: Connect Zig and Ethereum developer communities
 
 ---
 
-## 📊 Current Status
+## Current Status
 
 ### Implementation Progress
 
@@ -32,26 +32,26 @@ Zeth aims to be:
 
 ### What Works
 
-✅ Core arithmetic and comparison operations  
-✅ Stack operations (PUSH, DUP, SWAP)  
-✅ Memory and storage operations (with EIP-2929)  
-✅ Flow control (JUMP, JUMPI)  
-✅ Environmental and block information  
-✅ Logging operations  
-✅ Reference implementation comparison framework  
+- Core arithmetic and comparison operations  
+- Stack operations (PUSH, DUP, SWAP)  
+- Memory and storage operations (with EIP-2929)  
+- Flow control (JUMP, JUMPI)  
+- Environmental and block information  
+- Logging operations  
+- Reference implementation comparison framework  
 
 ### In Progress
 
-🚧 Complete opcode implementation (~170 remaining)  
-🚧 Full Ethereum test suite integration  
-🚧 Gas cost verification for all opcodes  
-🚧 Performance optimization  
+- Complete opcode implementation (~170 remaining)  
+- Full Ethereum test suite integration  
+- Gas cost verification for all opcodes  
+- Performance optimization  
 
 **Target**: 100% opcode parity within 6-8 weeks
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -101,7 +101,7 @@ zig build
 
 ---
 
-## 📖 Documentation
+## Documentation
 
 - **[Architecture](docs/architecture/ARCHITECTURE.md)](docs/architecture/ARCHITECTURE.md)** - System design and components
 - **[EVM Parity Status](docs/architecture/EVM_PARITY_STATUS.md)** - Implementation progress
@@ -111,7 +111,7 @@ zig build
 
 ---
 
-## 🏗️ Project Structure
+## Project Structure
 
 ```
 zeth/
@@ -128,9 +128,9 @@ zeth/
 
 ---
 
-## 🧪 Validation & Testing
+## Validation & Testing
 
-### RLP Implementation: 98.8% Validated ✅
+### RLP Implementation: 98.8% Validated
 
 - **Encoding**: 28/28 tests (100%)
 - **Decoding**: 28/28 tests (100%)
@@ -139,8 +139,8 @@ zeth/
 
 ### Reference Implementation Comparison
 
-- **PyEVM**: ✅ Integrated, 11/11 critical opcodes validated
-- **Geth**: ⏳ Setup in progress
+- **PyEVM**: Integrated, 11/11 critical opcodes validated
+- **Geth**: Setup in progress
 
 ### Test Coverage
 
@@ -150,7 +150,7 @@ zeth/
 
 ---
 
-## 🎓 Why Zig for Ethereum?
+## Why Zig for Ethereum?
 
 ### Memory Safety
 - Compile-time checks prevent vulnerabilities
@@ -174,7 +174,7 @@ zeth/
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 We welcome contributions! Priority areas:
 
@@ -187,15 +187,15 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ---
 
-## 📋 Roadmap
+## Roadmap
 
-### Phase 1: Foundation (Weeks 1-4) ✅
+### Phase 1: Foundation (Weeks 1-4)
 - Core EVM implementation
 - RLP validation
 - Reference comparison framework
 - Repository professionalization
 
-### Phase 2: Parity (Weeks 5-8) 🚧
+### Phase 2: Parity (Weeks 5-8)
 - Complete opcode implementation
 - Full test suite integration
 - Gas cost verification
@@ -211,27 +211,27 @@ See [Roadmap](docs/community/PROJECT_ROADMAP.md) for details.
 
 ---
 
-## ⚠️ Status Disclaimer
+## Status Disclaimer
 
 **This is alpha software under active development.**
 
-- ✅ RLP: Ethereum validated (98.8%)
-- 🚧 EVM: Implementation in progress (~30% complete)
-- ⚠️ Not production ready
-- ⚠️ Not audited
-- ⚠️ Do not use with real funds
+- RLP: Ethereum validated (98.8%)
+- EVM: Implementation in progress (~30% complete)
+- Not production ready
+- Not audited
+- Do not use with real funds
 
 We validate systematically. We launch with proof.
 
 ---
 
-## 📄 License
+## License
 
 MIT License - See [LICENSE](LICENSE)
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - [Ethereum Foundation](https://ethereum.org) - Specifications and test vectors
 - [go-ethereum](https://github.com/ethereum/go-ethereum) - Reference implementation
@@ -240,13 +240,13 @@ MIT License - See [LICENSE](LICENSE)
 
 ---
 
-## 🌟 Get Involved
+## Get Involved
 
-- ⭐ **Star** the repository
-- 🐛 **Report** bugs via [Issues](https://github.com/SMC17/eth-zig/issues)
-- 💬 **Discuss** in [Discussions](https://github.com/SMC17/eth-zig/discussions)
-- 📝 **Contribute** code or documentation
-- 📢 **Share** with Zig and Ethereum communities
+- **Star** the repository
+- **Report** bugs via [Issues](https://github.com/SMC17/eth-zig/issues)
+- **Discuss** in [Discussions](https://github.com/SMC17/eth-zig/discussions)
+- **Contribute** code or documentation
+- **Share** with Zig and Ethereum communities
 
 ---
 

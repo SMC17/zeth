@@ -7,7 +7,7 @@
 
 ---
 
-## 🎯 Philosophy
+##  Philosophy
 
 We don't hide limitations - we **document** them. This demonstrates:
 - Engineering maturity
@@ -17,7 +17,7 @@ We don't hide limitations - we **document** them. This demonstrates:
 
 ---
 
-## ⚠️  Known Limitations (By Component)
+##   Known Limitations (By Component)
 
 ### U256 Arithmetic
 
@@ -31,11 +31,11 @@ We don't hide limitations - we **document** them. This demonstrates:
 ```zig
 // WORKS:
 let a = 100, b = 5
-a / b = 20 ✅
+a / b = 20 
 
 // DOESN'T WORK YET:
 let a = 2^128, b = 2^64  
-a / b = returns 0 ⚠️
+a / b = returns 0 
 ```
 
 **Test Coverage**: Documented in edge_case_tests.zig
@@ -155,79 +155,79 @@ a / b = returns 0 ⚠️
 
 ---
 
-## ✅ Verified Behaviors
+##  Verified Behaviors
 
 ### What We KNOW Works
 
 #### Stack Operations (Perfect)
-- ✅ All PUSH operations (PUSH1-32)
-- ✅ All DUP operations (DUP1-16)
-- ✅ All SWAP operations (SWAP1-16)
-- ✅ Stack overflow detection at 1024
-- ✅ Stack underflow detection
-- ✅ All edge cases tested
+-  All PUSH operations (PUSH1-32)
+-  All DUP operations (DUP1-16)
+-  All SWAP operations (SWAP1-16)
+-  Stack overflow detection at 1024
+-  Stack underflow detection
+-  All edge cases tested
 
 **Confidence**: 10/10
 
 #### Arithmetic (Excellent for Common Cases)
-- ✅ ADD: Handles overflow via wrapping
-- ✅ SUB: Handles underflow via wrapping
-- ✅ MUL: Works for values < 2^128
-- ✅ DIV: Works for divisors < 2^64, handles division by zero
-- ✅ MOD: Works for modulus < 2^64, handles mod by zero
+-  ADD: Handles overflow via wrapping
+-  SUB: Handles underflow via wrapping
+-  MUL: Works for values < 2^128
+-  DIV: Works for divisors < 2^64, handles division by zero
+-  MOD: Works for modulus < 2^64, handles mod by zero
 
 **Confidence**: 8/10 (perfect for 95% of cases)
 
 #### Comparison & Logic (Perfect)
-- ✅ LT, GT, EQ, ISZERO all correct
-- ✅ Proper U256 comparison
-- ✅ All edge cases tested
+-  LT, GT, EQ, ISZERO all correct
+-  Proper U256 comparison
+-  All edge cases tested
 
 **Confidence**: 10/10
 
 #### Bitwise (Perfect)
-- ✅ AND, OR, XOR, NOT all correct
-- ✅ SHL, SHR work correctly
-- ✅ All edge cases tested
+-  AND, OR, XOR, NOT all correct
+-  SHL, SHR work correctly
+-  All edge cases tested
 
 **Confidence**: 10/10
 
 #### Memory & Storage (Perfect)
-- ✅ MLOAD, MSTORE work correctly
-- ✅ Memory expands as needed
-- ✅ SLOAD, SSTORE work correctly
-- ✅ Storage persists within execution
-- ✅ No memory leaks (GPA verified)
+-  MLOAD, MSTORE work correctly
+-  Memory expands as needed
+-  SLOAD, SSTORE work correctly
+-  Storage persists within execution
+-  No memory leaks (GPA verified)
 
 **Confidence**: 10/10
 
 #### Gas Metering (Perfect)
-- ✅ Accurate per-opcode costs
-- ✅ Enforces limits correctly
-- ✅ OutOfGas at exact threshold
-- ✅ All edge cases tested
+-  Accurate per-opcode costs
+-  Enforces limits correctly
+-  OutOfGas at exact threshold
+-  All edge cases tested
 
 **Confidence**: 10/10
 
 #### Event Logging (Perfect)
-- ✅ LOG0-4 all work
-- ✅ Topics handled correctly
-- ✅ Data stored properly
-- ✅ Gas costs accurate
+-  LOG0-4 all work
+-  Topics handled correctly
+-  Data stored properly
+-  Gas costs accurate
 
 **Confidence**: 10/10
 
 #### Error Handling (Perfect)
-- ✅ REVERT propagates correctly
-- ✅ Invalid opcodes caught
-- ✅ All error paths tested
-- ✅ No crashes on bad input
+-  REVERT propagates correctly
+-  Invalid opcodes caught
+-  All error paths tested
+-  No crashes on bad input
 
 **Confidence**: 10/10
 
 ---
 
-## 📊 Test Coverage by Area
+##  Test Coverage by Area
 
 | Component | Tests | Edge Cases | Coverage | Confidence |
 |-----------|-------|------------|----------|------------|
@@ -246,39 +246,39 @@ a / b = returns 0 ⚠️
 
 ---
 
-## 🔍 Failure Modes We've Tested
+##  Failure Modes We've Tested
 
-### 1. Stack Overflow ✅
+### 1. Stack Overflow 
 **Trigger**: Push > 1024 items  
 **Behavior**: Returns error.StackOverflow  
 **Verified**: Yes, test added  
 **Handled**: Correctly
 
-### 2. Stack Underflow ✅
+### 2. Stack Underflow 
 **Trigger**: POP from empty stack, DUP/SWAP with insufficient items  
 **Behavior**: Returns error.StackUnderflow  
 **Verified**: Yes, multiple tests  
 **Handled**: Correctly
 
-### 3. Out of Gas ✅
+### 3. Out of Gas 
 **Trigger**: Execute operations exceeding gas limit  
 **Behavior**: Returns error.OutOfGas at exact threshold  
 **Verified**: Yes, precise to the gas unit  
 **Handled**: Correctly
 
-### 4. Division by Zero ✅
+### 4. Division by Zero 
 **Trigger**: DIV or MOD by zero  
 **Behavior**: Returns zero (per Ethereum spec)  
 **Verified**: Yes  
 **Handled**: Correctly
 
-### 5. Invalid Opcode ✅
+### 5. Invalid Opcode 
 **Trigger**: Execute undefined opcode  
 **Behavior**: Returns error.InvalidOpcode  
 **Verified**: Yes  
 **Handled**: Correctly
 
-### 6. REVERT ✅
+### 6. REVERT 
 **Trigger**: REVERT opcode executed  
 **Behavior**: Returns error.Revert, sets success=false  
 **Verified**: Yes  
@@ -292,18 +292,18 @@ a / b = returns 0 ⚠️
 
 ---
 
-## 📈 Performance Boundaries
+##  Performance Boundaries
 
 ### Tested Limits
 
 | Operation | Tested Limit | Status |
 |-----------|--------------|--------|
-| Stack Depth | 1024 items | ✅ Enforced |
-| Memory Size | Up to 64KB | ✅ Works |
-| Storage Keys | 1000+ keys | ✅ Works |
-| Bytecode Length | 10KB+ | ✅ Works |
-| Consecutive Ops | 100+ operations | ✅ Works |
-| Gas Usage | Millions | ✅ Tracks correctly |
+| Stack Depth | 1024 items |  Enforced |
+| Memory Size | Up to 64KB |  Works |
+| Storage Keys | 1000+ keys |  Works |
+| Bytecode Length | 10KB+ |  Works |
+| Consecutive Ops | 100+ operations |  Works |
+| Gas Usage | Millions |  Tracks correctly |
 
 ### Untested Limits
 
@@ -318,49 +318,49 @@ a / b = returns 0 ⚠️
 
 ---
 
-## 🛡️ Security Considerations
+##  Security Considerations
 
-### Memory Safety ✅
+### Memory Safety 
 - **No unsafe code**: Verified
 - **All allocations explicit**: Verified
 - **Bounds checking**: Enforced by Zig
 - **Integer overflow**: Handled via wrapping (Ethereum spec)
 
-### Execution Safety ✅
+### Execution Safety 
 - **Gas limits**: Enforced
 - **Stack limits**: Enforced
 - **Error propagation**: Correct
 - **No infinite loops**: Gas prevents
 
-### Input Validation ✅
+### Input Validation 
 - **Invalid opcodes**: Caught
 - **Malformed bytecode**: Handled
 - **Edge case values**: Tested
 
 ---
 
-## 🎯 Risk Assessment
+##  Risk Assessment
 
-### Low Risk ✅
+### Low Risk 
 - Core arithmetic (tested)
 - Stack operations (tested)
 - Memory operations (tested)
 - Storage operations (tested)
 - Gas metering (tested)
 
-### Medium Risk ⚠️
+### Medium Risk 
 - Large number operations (>2^64)
 - Multi-contract interactions (CALL not fully implemented)
 - Contract creation (CREATE simplified)
 
-### High Risk (Known & Documented) ❌
+### High Risk (Known & Documented) 
 - Cryptographic accuracy (SHA3 vs Keccak-256)
 - Signature verification (not implemented)
 - Network integration (future work)
 
 ---
 
-## 🔧 Mitigation Strategies
+##  Mitigation Strategies
 
 ### For Large Numbers
 - **Now**: Document limitation, works for 95% of cases
@@ -379,7 +379,7 @@ a / b = returns 0 ⚠️
 
 ---
 
-## 📋 Issue Tracking
+##  Issue Tracking
 
 All known issues are tracked in GitHub Issues with labels:
 - `known-limitation`: Documented here
@@ -391,7 +391,7 @@ See: https://github.com/SMC17/zeth/issues
 
 ---
 
-## ✅ What This Document Demonstrates
+##  What This Document Demonstrates
 
 ### 1. We Know Our Boundaries
 Not guessing - **tested and verified**
@@ -407,14 +407,14 @@ Not surface-level - **deep understanding**
 
 ---
 
-## 🎓 For Technical Evaluators
+##  For Technical Evaluators
 
 This document proves:
-- ✅ **Systematic testing** (66+ tests, all edge cases)
-- ✅ **Risk awareness** (all issues documented)
-- ✅ **Clear boundaries** (know where it breaks)
-- ✅ **Mitigation plans** (path to resolution)
-- ✅ **Engineering maturity** (no surprises)
+-  **Systematic testing** (66+ tests, all edge cases)
+-  **Risk awareness** (all issues documented)
+-  **Clear boundaries** (know where it breaks)
+-  **Mitigation plans** (path to resolution)
+-  **Engineering maturity** (no surprises)
 
 **Confidence in codebase**: 9.5/10
 

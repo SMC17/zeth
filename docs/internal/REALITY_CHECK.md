@@ -5,7 +5,7 @@
 
 ---
 
-## ⚠️ STOP. VALIDATE. THEN SHIP.
+##  STOP. VALIDATE. THEN SHIP.
 
 You're absolutely right. We built impressive-looking code but haven't proven it matches Ethereum.
 
@@ -17,21 +17,21 @@ That's the difference between a demo and production.
 
 ---
 
-## 🚨 What We THINK We Have vs What We KNOW
+##  What We THINK We Have vs What We KNOW
 
 | Feature | Our Tests | Ethereum Verified | Truth |
 |---------|-----------|-------------------|-------|
-| RLP Encoding | ✅ Pass | ❌ Not tested | Unknown |
-| U256 Arithmetic | ✅ Pass | ❌ Not tested | Unknown |
-| ADD opcode | ✅ Works | ❌ Not verified | Unknown |
-| Gas costs | ✅ "Reasonable" | ❌ Not checked | Probably wrong |
-| Event logs | ✅ "Works" | ❌ Not validated | Unknown |
+| RLP Encoding |  Pass |  Not tested | Unknown |
+| U256 Arithmetic |  Pass |  Not tested | Unknown |
+| ADD opcode |  Works |  Not verified | Unknown |
+| Gas costs |  "Reasonable" |  Not checked | Probably wrong |
+| Event logs |  "Works" |  Not validated | Unknown |
 
 **Confidence Before Validation**: ~50% - We probably got some things right
 
 ---
 
-## 📋 VALIDATION PLAN (Must Complete Before Launch)
+##  VALIDATION PLAN (Must Complete Before Launch)
 
 ### Phase 1: Get Ground Truth (Week 1)
 1. Download Ethereum test vectors
@@ -65,7 +65,7 @@ That's the difference between a demo and production.
 
 ---
 
-## 🎯 DO NOT LAUNCH UNTIL
+##  DO NOT LAUNCH UNTIL
 
 - [ ] >90% RLP tests pass
 - [ ] >80% VM tests pass (for our opcodes)
@@ -77,7 +77,7 @@ That's the difference between a demo and production.
 
 ---
 
-## 💡 What We'll Likely Find
+##  What We'll Likely Find
 
 ### Expected Issues (Be Ready)
 1. Gas costs wrong (highly likely)
@@ -94,23 +94,23 @@ That's the difference between a demo and production.
 
 ---
 
-## 🔥 The Right Way Forward
+##  The Right Way Forward
 
 ### DON'T:
-- ❌ Launch now
-- ❌ Hope nobody notices
-- ❌ Look foolish when they test it
+-  Launch now
+-  Hope nobody notices
+-  Look foolish when they test it
 
 ### DO:
-- ✅ Download Ethereum tests
-- ✅ Run them systematically
-- ✅ Fix everything we find
-- ✅ Document honestly
-- ✅ Launch with "Validated against Ethereum"
+-  Download Ethereum tests
+-  Run them systematically
+-  Fix everything we find
+-  Document honestly
+-  Launch with "Validated against Ethereum"
 
 ---
 
-## 📊 New Launch Criteria
+##  New Launch Criteria
 
 ### Minimum Bar:
 - RLP: >90% official tests pass

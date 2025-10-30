@@ -54,11 +54,11 @@ pub fn main() !void {
             if (matches) {
                 passed += 1;
                 if (passed <= 5) {
-                    std.debug.print("✅ PASS: {s}\n", .{test_name});
+                    std.debug.print(" PASS: {s}\n", .{test_name});
                 }
             } else {
                 failed += 1;
-                std.debug.print("❌ FAIL: {s} - decoded but doesn't match input\n", .{test_name});
+                std.debug.print(" FAIL: {s} - decoded but doesn't match input\n", .{test_name});
             }
             
             // Free decoded data
@@ -66,7 +66,7 @@ pub fn main() !void {
         } else |err| {
             // Decoding failed
             failed += 1;
-            std.debug.print("❌ FAIL: {s} - decode error: {}\n", .{test_name, err});
+            std.debug.print(" FAIL: {s} - decode error: {}\n", .{test_name, err});
             
             if (failed >= 10) {
                 std.debug.print("\n(Stopping after 10 failures)\n\n", .{});
@@ -85,9 +85,9 @@ pub fn main() !void {
     }
     
     if (passed == total) {
-        std.debug.print("\n🎉 ALL DECODING TESTS PASS!\n", .{});
+        std.debug.print("\n ALL DECODING TESTS PASS!\n", .{});
     } else {
-        std.debug.print("\n⚠️  Decoder has bugs. Need to fix.\n", .{});
+        std.debug.print("\n  Decoder has bugs. Need to fix.\n", .{});
     }
 }
 

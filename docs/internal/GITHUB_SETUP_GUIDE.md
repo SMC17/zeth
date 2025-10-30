@@ -59,9 +59,9 @@ git push origin week4-professionalization
 2. **Check workflow run**: Should see a new workflow run triggered by your push
 3. **Monitor progress**: Click on the run to see real-time progress
 4. **Verify all jobs pass**:
-   - ✅ Test Suite
-   - ✅ Code Quality (lint)
-   - ✅ Build All Targets (Linux & macOS)
+   -  Test Suite
+   -  Code Quality (lint)
+   -  Build All Targets (Linux & macOS)
 
 5. **If tests fail**: Check the logs and fix issues locally before pushing again
 
@@ -87,11 +87,11 @@ No manual update needed - badges update automatically after first successful CI 
 ### Add Columns
 
 Suggested columns:
-- 📋 **Backlog** - Ideas and future work
-- 🔄 **In Progress** - Active development
-- ✅ **Done** - Completed items
-- 🐛 **Bugs** - Issues to fix
-- 📝 **Documentation** - Docs to write/update
+-  **Backlog** - Ideas and future work
+-  **In Progress** - Active development
+-  **Done** - Completed items
+-  **Bugs** - Issues to fix
+-  **Documentation** - Docs to write/update
 
 ### Create Initial Cards
 
@@ -111,11 +111,11 @@ Suggested columns:
 ### Create Discussion Categories
 
 Suggested categories:
-- 💬 **General** - General project discussion
-- ❓ **Q&A** - Questions and answers
-- 💡 **Ideas** - Feature suggestions
-- 🎓 **Learning** - Zig and EVM learning resources
-- 🔬 **Research** - Research and experiments
+-  **General** - General project discussion
+-  **Q&A** - Questions and answers
+-  **Ideas** - Feature suggestions
+-  **Learning** - Zig and EVM learning resources
+-  **Research** - Research and experiments
 
 ### Create Welcome Discussion
 
@@ -139,11 +139,11 @@ validated against Ethereum's test suite.
 
 **Get Involved**:
 - ⭐ Star the repository
-- 🐛 Report bugs via Issues
-- 💡 Share ideas in Discussions
-- 📝 Contribute code or documentation
+-  Report bugs via Issues
+-  Share ideas in Discussions
+-  Contribute code or documentation
 
-Let's build the future of EVM development in Zig! 🚀
+Let's build the future of EVM development in Zig! 
 ```
 
 ## Step 8: Create Initial Issues
@@ -253,5 +253,5 @@ Topics to add:
 
 ---
 
-**Status**: Ready to push and activate! 🚀
+**Status**: Ready to push and activate! 
 

@@ -87,6 +87,6 @@ pub fn main() !void {
     }
     std.debug.print("  Gas used: {}\n\n", .{vm2.gas_used});
     
-    std.debug.print("✅ Event logging works perfectly!\n", .{});
+    std.debug.print("Event logging works perfectly!\n", .{});
 }
 

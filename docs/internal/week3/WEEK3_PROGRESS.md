@@ -6,43 +6,43 @@
 
 ---
 
-## ✅ **COMPLETED**
+##  **COMPLETED**
 
-### **1. Reference Interface Framework** ✅
+### **1. Reference Interface Framework** 
 - Created `reference_interfaces.zig`:
   - Geth subprocess interface (placeholder)
   - PyEVM subprocess interface (Python script execution)
   - Hex parsing utilities
   - Availability checking functions
 
-### **2. Discrepancy Tracking System** ✅
+### **2. Discrepancy Tracking System** 
 - Created `discrepancy_tracker.zig`:
   - `Discrepancy` struct with severity levels
   - `DiscrepancyTracker` for systematic tracking
   - Report generation
   - File export functionality
 
-### **3. Reference Test Runner** ✅
+### **3. Reference Test Runner** 
 - Created `reference_test_runner.zig`:
   - `TestRunner` for automated comparison
   - Integration with comparison tool
   - Automatic discrepancy tracking
   - Match rate calculation
 
-### **4. Integration with Comparison Tool** ✅
+### **4. Integration with Comparison Tool** 
 - Updated comparison framework to work with reference interfaces
 - Test runner executes on both our EVM and reference
 - Automatic discrepancy detection and categorization
 
 ---
 
-## 📊 **CURRENT STATUS**
+##  **CURRENT STATUS**
 
 ### **Framework Readiness**
-- ✅ Reference interface structure created
-- ✅ Discrepancy tracking ready
-- ✅ Test runner framework ready
-- ⏳ Reference implementations need setup (Geth/PyEVM)
+-  Reference interface structure created
+-  Discrepancy tracking ready
+-  Test runner framework ready
+-  Reference implementations need setup (Geth/PyEVM)
 
 ### **Test Coverage**
 - **Test cases defined**: 13 critical opcodes
@@ -51,7 +51,7 @@
 
 ---
 
-## 🚧 **PENDING SETUP**
+##  **PENDING SETUP**
 
 ### **Reference Implementation Requirements**
 
@@ -68,7 +68,7 @@
 
 ---
 
-## 📋 **TEST FRAMEWORK DESIGN**
+##  **TEST FRAMEWORK DESIGN**
 
 ### **Test Execution Flow**
 1. Execute bytecode on our EVM → capture state
@@ -91,29 +91,29 @@
 
 ---
 
-## 🎯 **NEXT STEPS**
+##  **NEXT STEPS**
 
 ### **Immediate (Week 3)**
-1. ⏳ Set up PyEVM Python environment
-2. ⏳ Create proper PyEVM execution script
-3. ⏳ Test with 5-10 opcodes
-4. ⏳ Verify framework works end-to-end
+1.  Set up PyEVM Python environment
+2.  Create proper PyEVM execution script
+3.  Test with 5-10 opcodes
+4.  Verify framework works end-to-end
 
 ### **Short-term (Week 3-4)**
-1. ⏳ Run 50+ opcode tests against reference
-2. ⏳ Document all discrepancies
-3. ⏳ Fix critical and high severity bugs
-4. ⏳ Achieve >80% match rate
+1.  Run 50+ opcode tests against reference
+2.  Document all discrepancies
+3.  Fix critical and high severity bugs
+4.  Achieve >80% match rate
 
 ### **Medium-term (Week 4-5)**
-1. ⏳ Expand to all opcodes
-2. ⏳ Test edge cases
-3. ⏳ Fix remaining discrepancies
-4. ⏳ Achieve >95% match rate
+1.  Expand to all opcodes
+2.  Test edge cases
+3.  Fix remaining discrepancies
+4.  Achieve >95% match rate
 
 ---
 
-## 📈 **METRICS TO TRACK**
+##  **METRICS TO TRACK**
 
 ### **Code Metrics**
 - Framework LOC: +700 (interfaces + tracker + runner)
@@ -127,7 +127,7 @@
 
 ---
 
-## 💡 **USAGE**
+##  **USAGE**
 
 ### **Run Reference Comparison Tests**
 ```bash
@@ -145,7 +145,7 @@ const pyevm_available = reference.isPyEVMAvailable();
 
 ---
 
-## 🔧 **TECHNICAL NOTES**
+##  **TECHNICAL NOTES**
 
 ### **PyEVM Interface**
 - Uses Python subprocess execution
@@ -166,7 +166,7 @@ const pyevm_available = reference.isPyEVMAvailable();
 
 ---
 
-## 📝 **DISCREPANCY DOCUMENTATION**
+##  **DISCREPANCY DOCUMENTATION**
 
 When discrepancies are found:
 1. Document in `DiscrepancyTracker`

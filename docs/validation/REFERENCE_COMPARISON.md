@@ -5,13 +5,13 @@
 
 ---
 
-## 🎯 **OBJECTIVE**
+##  **OBJECTIVE**
 
 Verify our opcode behavior matches reference implementations (Geth, PyEVM, etc.)
 
 ---
 
-## 📋 **REFERENCE IMPLEMENTATIONS**
+##  **REFERENCE IMPLEMENTATIONS**
 
 ### **Primary References**
 1. **Geth** (Go Ethereum)
@@ -35,7 +35,7 @@ Verify our opcode behavior matches reference implementations (Geth, PyEVM, etc.)
 
 ---
 
-## 🔧 **COMPARISON METHODOLOGY**
+##  **COMPARISON METHODOLOGY**
 
 ### **1. Test Vector Execution**
 - Run same bytecode on both implementations
@@ -61,7 +61,7 @@ For each opcode:
 
 ---
 
-## 📊 **COMPARISON TOOL DESIGN**
+##  **COMPARISON TOOL DESIGN**
 
 ### **Tool Requirements**
 1. Execute bytecode on our EVM
@@ -99,7 +99,7 @@ compare_results(our_result, geth_result);
 
 ---
 
-## 🎯 **PRIORITY OPCODES**
+##  **PRIORITY OPCODES**
 
 ### **High Priority** (Critical for contracts)
 1. Arithmetic (ADD, SUB, MUL, DIV, MOD, EXP)
@@ -121,7 +121,7 @@ compare_results(our_result, geth_result);
 
 ---
 
-## 📈 **SUCCESS CRITERIA**
+##  **SUCCESS CRITERIA**
 
 ### **Phase 1**: Basic Verification
 - [ ] 50+ opcodes compared
@@ -141,7 +141,7 @@ compare_results(our_result, geth_result);
 
 ---
 
-## 🚀 **IMPLEMENTATION PLAN**
+##  **IMPLEMENTATION PLAN**
 
 ### **Week 3-4**
 1. Set up reference client access (Geth RPC or subprocess)
@@ -157,7 +157,7 @@ compare_results(our_result, geth_result);
 
 ---
 
-## 📝 **DISCREPANCY TRACKING**
+##  **DISCREPANCY TRACKING**
 
 For each discrepancy found:
 1. Document opcode

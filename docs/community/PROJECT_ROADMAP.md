@@ -4,7 +4,7 @@
 
 ## Current Status: v0.3.0-alpha
 
-### ✅ Completed (Weeks 1-3)
+###  Completed (Weeks 1-3)
 - [x] Core EVM implementation (80+ opcodes)
 - [x] RLP encoding/decoding (98.8% Ethereum validated)
 - [x] Reference implementation comparison framework
@@ -12,7 +12,7 @@
 - [x] 11 critical opcodes validated against PyEVM
 - [x] SSTORE gas cost fix (EIP-2929)
 
-### 🚧 In Progress (Week 4+)
+###  In Progress (Week 4+)
 - [ ] Complete opcode implementation (target: 100%)
 - [ ] Full opcode validation against Ethereum tests
 - [ ] Gas cost verification for all opcodes

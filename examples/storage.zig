@@ -69,6 +69,6 @@ pub fn main() !void {
     
     std.debug.print("  Multiple values stored successfully!\n\n", .{});
     
-    std.debug.print("✅ Storage contract works perfectly!\n", .{});
+    std.debug.print("Storage contract works perfectly!\n", .{});
 }
 

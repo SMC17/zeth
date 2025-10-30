@@ -51,11 +51,11 @@ pub fn main() !void {
         if (std.mem.eql(u8, expected, result)) {
             passed += 1;
             if (passed <= 5) {
-                std.debug.print("✅ PASS: {s}\n", .{test_name});
+                std.debug.print(" PASS: {s}\n", .{test_name});
             }
         } else {
             failed += 1;
-            std.debug.print("❌ FAIL: {s}\n", .{test_name});
+            std.debug.print(" FAIL: {s}\n", .{test_name});
             std.debug.print("   Expected: 0x", .{});
             for (expected) |b| std.debug.print("{x:0>2}", .{b});
             std.debug.print("\n   Got:      0x", .{});
@@ -75,9 +75,9 @@ pub fn main() !void {
     std.debug.print("Failed: {} ({d:.1}%)\n", .{failed, @as(f64, @floatFromInt(failed)) / @as(f64, @floatFromInt(total)) * 100});
     
     if (passed == total) {
-        std.debug.print("\n🎉 ALL TESTS PASS! RLP implementation is correct!\n", .{});
+        std.debug.print("\n ALL TESTS PASS! RLP implementation is correct!\n", .{});
     } else {
-        std.debug.print("\n⚠️  We have bugs to fix. This is expected.\n", .{});
+        std.debug.print("\n  We have bugs to fix. This is expected.\n", .{});
     }
 }
 

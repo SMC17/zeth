@@ -5,13 +5,13 @@
 ### 1. **Memory Management Segfault - FIXED**
 - **Problem**: Strings in `comparison_tool.zig` were freed with `defer` before being duplicated in `discrepancy_tracker.add()`
 - **Fix**: Modified `addDiscrepancy()` to duplicate all strings immediately, updated `deinit()` to free them properly
-- **Status**: ✅ Fixed and verified
+- **Status**:  Fixed and verified
 
 ### 2. **PyEVM Executor Script Issues**
 - **Problem**: `pyevm_executor.py` had broken imports and wasn't using correct PyEVM API
 - **Current State**: Script updated to use `BerlinState.get_computation()` but computation execution needs fixing
 - **Issue**: `get_computation()` creates computation but doesn't execute it automatically
-- **Status**: ⚠️ In Progress - Need to properly execute computation
+- **Status**:  In Progress - Need to properly execute computation
 
 ### 3. **Test Discrepancies Analysis**
 - **Observation**: All 11 tests show "Our value: success, Reference: failure"
@@ -23,20 +23,20 @@
 ### 4. **Reference Script Path Mismatch**
 - **Problem**: Code was checking for `pyevm_executor_v3.py` but using `pyevm_executor_simple.py` (placeholder)
 - **Fix**: Updated to use `pyevm_executor.py` consistently
-- **Status**: ✅ Fixed
+- **Status**:  Fixed
 
 ## Current Status
 
 ### Working
-- ✅ Segfault fixed
-- ✅ Framework compiles and runs
-- ✅ PyEVM detection working
-- ✅ Test runner executes
+-  Segfault fixed
+-  Framework compiles and runs
+-  PyEVM detection working
+-  Test runner executes
 
 ### Needs Fix
-- ⚠️ PyEVM computation execution - `get_computation()` doesn't execute automatically
-- ⚠️ Gas calculation - PyEVM returning 0 gas suggests execution not happening
-- ⚠️ All 11 tests failing - need to investigate root cause
+-  PyEVM computation execution - `get_computation()` doesn't execute automatically
+-  Gas calculation - PyEVM returning 0 gas suggests execution not happening
+-  All 11 tests failing - need to investigate root cause
 
 ## Next Steps
 
