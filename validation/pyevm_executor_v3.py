@@ -51,27 +51,19 @@ def execute_bytecode(bytecode_hex: str, calldata_hex: str = "") -> dict:
         # Create state directly
         state = BerlinState(db, execution_context, BLANK_ROOT_HASH)
         
-        # Use state's apply_message to execute bytecode
+        # Use state's costless_execute_transaction to execute bytecode
         from eth.vm.message import Message
         message = Message(
-            origin=to_canonical_address(ZERO_ADDRESS),
+            gas=1000000,
             to=to_canonical_address(ZERO_ADDRESS),
+            sender=to_canonical_address(ZERO_ADDRESS),
             value=0,
             data=calldata,
-            gas=1000000,
             code=bytecode,
         )
         
-        # Create transaction context
-        from eth.vm.transaction_context import BaseTransactionContext
-        tx_context = BaseTransactionContext(
-            origin=to_canonical_address(ZERO_ADDRESS),
-            gas_price=0,
-            coinbase=to_canonical_address(ZERO_ADDRESS),
-        )
-        
-        # Execute via state.apply_message
-        computation = state.apply_message(message, tx_context)
+        # Execute via costless_execute_transaction
+        computation = state.costless_execute_transaction(message)
         
         if computation.is_error:
             return {
