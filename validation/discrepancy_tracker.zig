@@ -32,7 +32,7 @@ pub const Discrepancy = struct {
         low,        // Minor differences
     };
     
-    pub fn format(self: Discrepancy, writer: anytype, allocator: std.mem.Allocator) !void {
+    pub fn format(self: Discrepancy, writer: anytype) !void {
         try writer.print("Discrepancy: {s}\n", .{self.opcode});
         try writer.print("  Type: {s}\n", .{@tagName(self.type)});
         try writer.print("  Severity: {s}\n", .{@tagName(self.severity)});
@@ -115,14 +115,20 @@ pub const DiscrepancyTracker = struct {
         try writer.print("\n", .{});
         
         try writer.print("By type:\n", .{});
-        inline for (@typeInfo(DiscrepancyType).Enum.fields) |field| {
-            const disc_type = @field(DiscrepancyType, field.name);
-            try writer.print("  {s}: {}\n", .{ field.name, self.countByType(disc_type) });
+        const type_info = @typeInfo(DiscrepancyType);
+        switch (type_info) {
+            .enum => |enum_info| {
+                inline for (enum_info.fields) |field| {
+                    const disc_type = @field(DiscrepancyType, field.name);
+                    try writer.print("  {s}: {}\n", .{ field.name, self.countByType(disc_type) });
+                }
+            },
+            else => {},
         }
         try writer.print("\n", .{});
         
         for (self.discrepancies.items) |disc| {
-            try disc.format(writer, self.allocator);
+            try disc.format(writer);
             try writer.print("\n", .{});
         }
     }
@@ -135,7 +141,7 @@ pub const DiscrepancyTracker = struct {
         var report_list = try std.ArrayList(u8).initCapacity(self.allocator, 4096);
         defer report_list.deinit(self.allocator);
         
-        var writer = report_list.writer(self.allocator);
+        const writer = report_list.writer(self.allocator);
         try self.formatReport(writer);
         
         const report = try report_list.toOwnedSlice(self.allocator);
