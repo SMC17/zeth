@@ -101,12 +101,9 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
     };
     
     // Read stdout and stderr after process completes
-    var stdout_buf: [1024 * 1024]u8 = undefined;
-    var stderr_buf: [1024 * 1024]u8 = undefined;
-    
-    var stdout_list = std.ArrayList(u8).init(allocator);
+    var stdout_list = try std.ArrayList(u8).initCapacity(allocator, 0);
     defer stdout_list.deinit(allocator);
-    var stderr_list = std.ArrayList(u8).init(allocator);
+    var stderr_list = try std.ArrayList(u8).initCapacity(allocator, 0);
     defer stderr_list.deinit(allocator);
     
     if (child.stdout) |stdout_file| {

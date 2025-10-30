@@ -26,7 +26,7 @@ pub const ExecutionComparison = struct {
         value: types.U256,
     };
     
-    const ReferenceResult = struct {
+    pub const ReferenceResult = struct {
         success: bool,
         return_data: []const u8,
         gas_used: u64,
