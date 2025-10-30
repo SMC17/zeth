@@ -33,33 +33,13 @@ pub const Discrepancy = struct {
     };
     
     pub fn format(self: Discrepancy, writer: anytype, allocator: std.mem.Allocator) !void {
-        const opcode_str = try std.fmt.allocPrint(allocator, "Discrepancy: {s}\n", .{self.opcode});
-        defer allocator.free(opcode_str);
-        try writer.writeAll(opcode_str);
-        
-        const type_str = try std.fmt.allocPrint(allocator, "  Type: {s}\n", .{@tagName(self.type)});
-        defer allocator.free(type_str);
-        try writer.writeAll(type_str);
-        
-        const severity_str = try std.fmt.allocPrint(allocator, "  Severity: {s}\n", .{@tagName(self.severity)});
-        defer allocator.free(severity_str);
-        try writer.writeAll(severity_str);
-        
-        const desc_str = try std.fmt.allocPrint(allocator, "  Description: {s}\n", .{self.description});
-        defer allocator.free(desc_str);
-        try writer.writeAll(desc_str);
-        
-        const our_val_str = try std.fmt.allocPrint(allocator, "  Our value: {s}\n", .{self.our_value});
-        defer allocator.free(our_val_str);
-        try writer.writeAll(our_val_str);
-        
-        const ref_val_str = try std.fmt.allocPrint(allocator, "  Reference: {s}\n", .{self.reference_value});
-        defer allocator.free(ref_val_str);
-        try writer.writeAll(ref_val_str);
-        
-        const fixed_str = try std.fmt.allocPrint(allocator, "  Fixed: {}\n", .{self.fixed});
-        defer allocator.free(fixed_str);
-        try writer.writeAll(fixed_str);
+        try writer.print("Discrepancy: {s}\n", .{self.opcode});
+        try writer.print("  Type: {s}\n", .{@tagName(self.type)});
+        try writer.print("  Severity: {s}\n", .{@tagName(self.severity)});
+        try writer.print("  Description: {s}\n", .{self.description});
+        try writer.print("  Our value: {s}\n", .{self.our_value});
+        try writer.print("  Reference: {s}\n", .{self.reference_value});
+        try writer.print("  Fixed: {}\n", .{self.fixed});
     }
 };
 
@@ -123,44 +103,27 @@ pub const DiscrepancyTracker = struct {
         return counter;
     }
     
-    pub fn formatReport(self: *const DiscrepancyTracker, writer: anytype) !void {
-        try writer.writeAll("Discrepancy Report\n");
-        try writer.writeAll("==================\n\n");
+    // Helper formatReport that works with ArrayList writer (which has print method)
+    fn formatReport(self: *const DiscrepancyTracker, writer: anytype) !void {
+        try writer.print("Discrepancy Report\n", .{});
+        try writer.print("==================\n\n", .{});
+        try writer.print("Total discrepancies: {}\n", .{self.count()});
+        try writer.print("  Critical: {}\n", .{self.countBySeverity(.critical)});
+        try writer.print("  High: {}\n", .{self.countBySeverity(.high)});
+        try writer.print("  Medium: {}\n", .{self.countBySeverity(.medium)});
+        try writer.print("  Low: {}\n", .{self.countBySeverity(.low)});
+        try writer.print("\n", .{});
         
-        const total = try std.fmt.allocPrint(self.allocator, "Total discrepancies: {}\n", .{self.count()});
-        defer self.allocator.free(total);
-        try writer.writeAll(total);
-        
-        const critical = try std.fmt.allocPrint(self.allocator, "  Critical: {}\n", .{self.countBySeverity(.critical)});
-        defer self.allocator.free(critical);
-        try writer.writeAll(critical);
-        
-        const high = try std.fmt.allocPrint(self.allocator, "  High: {}\n", .{self.countBySeverity(.high)});
-        defer self.allocator.free(high);
-        try writer.writeAll(high);
-        
-        const medium = try std.fmt.allocPrint(self.allocator, "  Medium: {}\n", .{self.countBySeverity(.medium)});
-        defer self.allocator.free(medium);
-        try writer.writeAll(medium);
-        
-        const low = try std.fmt.allocPrint(self.allocator, "  Low: {}\n", .{self.countBySeverity(.low)});
-        defer self.allocator.free(low);
-        try writer.writeAll(low);
-        
-        try writer.writeAll("\n");
-        try writer.writeAll("By type:\n");
-        
+        try writer.print("By type:\n", .{});
         inline for (@typeInfo(DiscrepancyType).Enum.fields) |field| {
             const disc_type = @field(DiscrepancyType, field.name);
-            const type_str = try std.fmt.allocPrint(self.allocator, "  {s}: {}\n", .{ field.name, self.countByType(disc_type) });
-            defer self.allocator.free(type_str);
-            try writer.writeAll(type_str);
+            try writer.print("  {s}: {}\n", .{ field.name, self.countByType(disc_type) });
         }
-        try writer.writeAll("\n");
+        try writer.print("\n", .{});
         
         for (self.discrepancies.items) |disc| {
             try disc.format(writer, self.allocator);
-            try writer.writeAll("\n");
+            try writer.print("\n", .{});
         }
     }
     
@@ -168,10 +131,21 @@ pub const DiscrepancyTracker = struct {
         var file = try std.fs.cwd().createFile(file_path, .{});
         defer file.close();
         
-        var buf: [4096]u8 = undefined;
-        const writer = file.writer(&buf);
+        // Build report string in memory, then write to file
+        var report_list = try std.ArrayList(u8).initCapacity(self.allocator, 4096);
+        defer report_list.deinit(self.allocator);
+        
+        var writer = report_list.writer(self.allocator);
         try self.formatReport(writer);
+        
+        const report = try report_list.toOwnedSlice(self.allocator);
+        defer self.allocator.free(report);
+        
+        _ = try file.write(report);
     }
+    
+    // Helper formatReport that works with ArrayList writer
+    fn formatReport(self: *const DiscrepancyTracker, writer: anytype) !void {
 };
 
 const testing = std.testing;
