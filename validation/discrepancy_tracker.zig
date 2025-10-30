@@ -115,15 +115,9 @@ pub const DiscrepancyTracker = struct {
         try writer.print("\n", .{});
         
         try writer.print("By type:\n", .{});
-        const type_info = @typeInfo(DiscrepancyType);
-        switch (type_info) {
-            .enum => |enum_info| {
-                inline for (enum_info.fields) |field| {
-                    const disc_type = @field(DiscrepancyType, field.name);
-                    try writer.print("  {s}: {}\n", .{ field.name, self.countByType(disc_type) });
-                }
-            },
-            else => {},
+        inline for (@typeInfo(DiscrepancyType).enum.fields) |field| {
+            const disc_type = @field(DiscrepancyType, field.name);
+            try writer.print("  {s}: {}\n", .{ field.name, self.countByType(disc_type) });
         }
         try writer.print("\n", .{});
         
