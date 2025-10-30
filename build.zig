@@ -339,4 +339,35 @@ pub fn build(b: *std.Build) void {
     });
     const run_manual_opcode_tests = b.addRunArtifact(manual_opcode_tests);
     test_step.dependOn(&run_manual_opcode_tests.step);
+    
+    // Comparison tool tests
+    const comparison_test_mod = b.createModule(.{
+        .root_source_file = b.path("validation/comparison_tool.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    comparison_test_mod.addImport("evm", evm_mod);
+    comparison_test_mod.addImport("types", types_mod);
+    
+    const comparison_tests = b.addTest(.{
+        .root_module = comparison_test_mod,
+    });
+    const run_comparison_tests = b.addRunArtifact(comparison_tests);
+    test_step.dependOn(&run_comparison_tests.step);
+    
+    // Opcode verification tests
+    const opcode_verification_mod = b.createModule(.{
+        .root_source_file = b.path("validation/opcode_verification.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    opcode_verification_mod.addImport("evm", evm_mod);
+    opcode_verification_mod.addImport("types", types_mod);
+    opcode_verification_mod.addImport("comparison_tool", comparison_test_mod);
+    
+    const opcode_verification_tests = b.addTest(.{
+        .root_module = opcode_verification_mod,
+    });
+    const run_opcode_verification_tests = b.addRunArtifact(opcode_verification_tests);
+    test_step.dependOn(&run_opcode_verification_tests.step);
 }
