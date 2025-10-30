@@ -56,6 +56,7 @@ pub const DiscrepancyTracker = struct {
     
     pub fn deinit(self: *DiscrepancyTracker) void {
         for (self.discrepancies.items) |*disc| {
+            self.allocator.free(disc.opcode);
             self.allocator.free(disc.description);
             self.allocator.free(disc.our_value);
             self.allocator.free(disc.reference_value);
@@ -67,7 +68,7 @@ pub const DiscrepancyTracker = struct {
     
     pub fn add(self: *DiscrepancyTracker, opcode: []const u8, disc_type: DiscrepancyType, description: []const u8, our_val: []const u8, ref_val: []const u8, bytecode: []const u8, calldata: []const u8, severity: Discrepancy.Severity) !void {
         try self.discrepancies.append(self.allocator, Discrepancy{
-            .opcode = opcode,
+            .opcode = try self.allocator.dupe(u8, opcode),
             .type = disc_type,
             .description = try self.allocator.dupe(u8, description),
             .our_value = try self.allocator.dupe(u8, our_val),

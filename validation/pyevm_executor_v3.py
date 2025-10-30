@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 PyEVM bytecode executor for Zeth reference testing
-Simplified approach: Create state directly
+Uses state.apply_message with proper transaction wrapping
 """
 
 import sys
@@ -11,6 +11,7 @@ from eth.db.backends.memory import MemoryDB
 from eth.constants import ZERO_ADDRESS, BLANK_ROOT_HASH
 from eth_utils import to_canonical_address
 from eth.vm.execution_context import ExecutionContext
+from eth.vm.message import Message
 
 def execute_bytecode(bytecode_hex: str, calldata_hex: str = "") -> dict:
     """
@@ -51,8 +52,7 @@ def execute_bytecode(bytecode_hex: str, calldata_hex: str = "") -> dict:
         # Create state directly
         state = BerlinState(db, execution_context, BLANK_ROOT_HASH)
         
-        # Use state's costless_execute_transaction to execute bytecode
-        from eth.vm.message import Message
+        # Create message for execution
         message = Message(
             gas=1000000,
             to=to_canonical_address(ZERO_ADDRESS),
@@ -62,8 +62,29 @@ def execute_bytecode(bytecode_hex: str, calldata_hex: str = "") -> dict:
             code=bytecode,
         )
         
+        # Create a transaction object that state.costless_execute_transaction expects
+        # It needs: gas_price, and a copy() method that returns a transaction with updated gas_price
+        class SimpleTransaction:
+            def __init__(self, message):
+                self.gas_price = 0
+                self.message = message
+                self.nonce = 0
+                self.value = 0
+                self.data = message.data
+                self.to = message.to
+                self.sender = message.sender
+                self.gas = message.gas
+            
+            def copy(self, **kwargs):
+                new = SimpleTransaction(self.message)
+                for k, v in kwargs.items():
+                    setattr(new, k, v)
+                return new
+        
+        transaction = SimpleTransaction(message)
+        
         # Execute via costless_execute_transaction
-        computation = state.costless_execute_transaction(message)
+        computation = state.costless_execute_transaction(transaction)
         
         if computation.is_error:
             return {
@@ -109,4 +130,3 @@ if __name__ == "__main__":
     
     result = execute_bytecode(bytecode_hex, calldata_hex)
     print(json.dumps(result))
-

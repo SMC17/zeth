@@ -1,210 +1,188 @@
 # Contributing to Zeth
 
-First off, thank you for considering contributing to Zeth! It's people like you that will make Zeth the best Ethereum implementation in Zig.
+Thank you for your interest in contributing to Zeth! This document provides guidelines for contributing code, documentation, tests, and ideas.
 
-## Vision
-
-Zeth aims to be the most advanced, optimized, performant, and secure Ethereum implementation. We're building this as a community-driven project that evolves alongside both Zig and Ethereum.
-
-## Code of Conduct
-
-This project and everyone participating in it is governed by our commitment to fostering an open and welcoming environment. We pledge to make participation in our project a harassment-free experience for everyone.
-
-## How Can I Contribute?
+## How to Contribute
 
 ### Reporting Bugs
 
-Before creating bug reports, please check the existing issues to avoid duplicates. When creating a bug report, include:
+Use the [Bug Report template](.github/ISSUE_TEMPLATE/bug_report.md) when opening an issue. Include:
 
-- **Clear title and description**
-- **Steps to reproduce** the problem
-- **Expected vs actual behavior**
-- **Zig version** (`zig version`)
-- **OS and architecture**
-- **Code samples** if applicable
+- Clear description of the bug
+- Steps to reproduce
+- Expected vs actual behavior
+- Environment details (Zig version, OS, etc.)
 
-### Suggesting Enhancements
+### Suggesting Features
 
-Enhancement suggestions are tracked as GitHub issues. When creating an enhancement suggestion:
+Use the [Feature Request template](.github/ISSUE_TEMPLATE/feature_request.md). Explain:
 
-- **Use a clear and descriptive title**
-- **Provide a detailed description** of the proposed functionality
-- **Explain why this enhancement would be useful**
-- **List any similar implementations** in other Ethereum clients
+- The problem you're solving
+- Proposed solution
+- Alternative approaches considered
 
-### Pull Requests
+### Implementing Opcodes
 
-1. **Fork the repo** and create your branch from `main`
-2. **Follow the Zig style guide**: Use `zig fmt` on all code
-3. **Add tests** for new functionality
-4. **Update documentation** including comments and README
-5. **Ensure all tests pass** with `zig build test`
-6. **Write clear commit messages**
+See the [Opcode Implementation template](.github/ISSUE_TEMPLATE/opcode_implementation.md). Priority areas:
 
-#### Commit Message Format
+1. **Copy Operations**: CALLDATACOPY, CODECOPY, RETURNDATACOPY, EXTCODECOPY
+2. **Signed Operations**: SDIV, SMOD, SIGNEXTEND
+3. **External Operations**: BALANCE, EXTCODESIZE, EXTCODEHASH
+4. **Block Info**: BLOCKHASH, SELFBALANCE
 
-```
-<type>: <subject>
+Check [EVM Parity Status](docs/architecture/EVM_PARITY_STATUS.md) for current status.
 
-<body>
+## Development Workflow
 
-<footer>
-```
-
-Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
-
-Example:
-```
-feat: add EIP-1559 transaction support
-
-Implement dynamic fee transactions with base fee and priority fee.
-Includes validation and RLP encoding.
-
-Closes #42
-```
-
-## Development Setup
+### 1. Fork and Clone
 
 ```bash
-# Clone your fork
-git clone https://github.com/YOUR_USERNAME/eth-zig.git
-cd eth-zig
+git clone https://github.com/YOUR_USERNAME/zeth.git
+cd zeth
+```
 
-# Verify Zig version
-zig version  # Should be 0.15.1 or later
+### 2. Create a Branch
 
-# Build and test
-zig build
+```bash
+git checkout -b feature/your-feature-name
+# or
+git checkout -b opcode/opcode-name
+# or
+git checkout -b fix/bug-description
+```
+
+### 3. Make Changes
+
+- Follow existing code patterns
+- Add tests for new functionality
+- Update documentation
+- Run `zig fmt` before committing
+
+### 4. Test Your Changes
+
+```bash
+# Run all tests
 zig build test
-zig build run
+
+# Validate RLP if modified
+zig build validate-rlp
+
+# Reference comparison if adding opcodes
+./zig-out/bin/run_reference_tests
 ```
 
-## Project Structure
+### 5. Commit
+
+Use clear, descriptive commit messages:
 
 ```
-src/
-├── main.zig          # Entry point and examples
-├── types/            # Core Ethereum types
-├── crypto/           # Cryptographic primitives
-├── rlp/              # RLP encoding/decoding
-├── evm/              # Ethereum Virtual Machine
-├── state/            # State management
-├── network/          # P2P networking (TODO)
-├── consensus/        # Consensus logic (TODO)
-└── rpc/              # JSON-RPC API (TODO)
+feat: implement CALLDATACOPY opcode
+fix: correct gas cost for EXP operation
+docs: add example for storage operations
+test: add edge case tests for MLOAD
 ```
 
-## Coding Standards
+### 6. Push and Create PR
 
-### Zig Style
-- Run `zig fmt` on all files
-- Use descriptive variable names
-- Document all public APIs with `///` doc comments
-- Keep functions focused and under 100 lines when possible
-- Use explicit error sets
+```bash
+git push origin feature/your-feature-name
+```
+
+Then open a Pull Request on GitHub with:
+- Clear description
+- Reference to related issues
+- Test results
+- Any breaking changes
+
+## Code Style
+
+### Zig Conventions
+
+- Use `zig fmt` for formatting
+- Follow Zig naming conventions
+- Add doc comments for public APIs
+- Use explicit error handling
+
+### Code Organization
+
+- Keep functions focused and small
+- Use descriptive names
+- Add comments for complex logic
+- Match existing patterns
 
 ### Testing
-- Write tests for all new functionality
-- Aim for >80% code coverage
-- Include both unit and integration tests
-- Test edge cases and error conditions
 
-### Documentation
-- Document all public functions and types
-- Include usage examples in doc comments
-- Update README.md for user-facing changes
-- Update IMPLEMENTATION_STATUS.md for feature progress
+- Add tests for all new functionality
+- Test edge cases
+- Validate against reference implementations
+- Update test counts in documentation
 
-## Areas Needing Help
+## Implementation Guidelines
 
-We need contributors in these areas (see issues for specifics):
+### Adding an Opcode
 
-### High Priority
-- **Cryptography**: Complete secp256k1 and Keccak-256 implementations
-- **EVM**: Expand opcode coverage (currently ~15/150+ opcodes)
-- **Testing**: More comprehensive test coverage
-- **Performance**: Benchmarking and optimization
+1. **Add to enum**: `src/evm/evm.zig` - `Opcode` enum
+2. **Add to switch**: `executeOpcode` function
+3. **Implement**: Create `opOpcodeName` function
+4. **Test**: Add tests in relevant test files
+5. **Validate**: Add to reference comparison
+6. **Document**: Update parity status
 
-### Medium Priority
-- **Networking**: DevP2P and RLPx protocol implementation
-- **Storage**: Database integration (LevelDB/RocksDB)
-- **JSON-RPC**: Web3-compatible API server
-- **Consensus**: Proof of Stake implementation
+### Example
 
-### Lower Priority
-- **Documentation**: More examples and tutorials
-- **Tooling**: Better CLI and configuration
-- **Monitoring**: Metrics and observability
-- **Compatibility**: Test against Ethereum test vectors
+```zig
+// In Opcode enum
+SOMEOPCODE = 0xXX,
 
-## Performance Guidelines
+// In executeOpcode switch
+.SOMEOPCODE => try self.opSomeOpcode(),
 
-- Profile before optimizing
-- Prefer clarity over premature optimization
-- Use `@setRuntimeSafety(false)` only in hot paths
-- Document performance-critical sections
-- Include benchmarks for optimization PRs
+// Implementation
+fn opSomeOpcode(self: *EVM) !void {
+    // Implementation
+    const value = try self.stack.pop();
+    // ... logic ...
+    try self.stack.push(self.allocator, result);
+    self.gas_used += GAS_COST;
+}
+```
 
-## Security
+## Validation Requirements
 
-### Reporting Security Issues
+### For Opcodes
 
-**Do not open public issues for security vulnerabilities.**
+- [ ] Unit tests passing
+- [ ] Gas cost verified against Yellow Paper
+- [ ] Reference implementation comparison (if available)
+- [ ] Edge cases tested
+- [ ] Documentation updated
 
-Email security concerns to: [Will be added - please create a security email]
+### For Core Features
 
-Include:
-- Description of the vulnerability
-- Steps to reproduce
-- Potential impact
-- Suggested fix (if any)
-
-### Security Review Checklist
-- [ ] No unsafe memory operations
-- [ ] Proper error handling
-- [ ] Input validation
-- [ ] No integer overflows
-- [ ] Cryptographic operations use vetted libraries
-- [ ] No hardcoded secrets
-
-## Communication
-
-- **GitHub Issues**: Bug reports, features, discussions
-- **GitHub Discussions**: General questions, ideas
-- **Discord** (coming soon): Real-time chat
-- **Twitter** (coming soon): Announcements
-
-## Recognition
-
-All contributors will be:
-- Listed in CONTRIBUTORS.md
-- Mentioned in release notes
-- Credited in relevant documentation
-
-Significant contributors may be invited to become maintainers.
+- [ ] Tests added
+- [ ] Documentation updated
+- [ ] Examples updated (if applicable)
+- [ ] Performance considered
 
 ## Getting Help
 
-- Read the [README.md](README.md) and [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)
-- Check existing issues and discussions
-- Ask questions in GitHub Discussions
-- Join our Discord (coming soon)
+- **Questions**: Open a [Discussion](https://github.com/SMC17/zeth/discussions)
+- **Bugs**: Open an [Issue](https://github.com/SMC17/zeth/issues)
+- **Code Review**: Wait for maintainer feedback on PRs
 
-## License
+## Code of Conduct
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
+- Be respectful and inclusive
+- Focus on constructive feedback
+- Help others learn
+- Follow the project's goals
 
-## References
+## Recognition
 
-Useful resources for contributors:
+Contributors will be:
 
-- [Ethereum Yellow Paper](https://ethereum.github.io/yellowpaper/paper.pdf)
-- [Ethereum EIPs](https://eips.ethereum.org/)
-- [go-ethereum (Geth)](https://github.com/ethereum/go-ethereum)
-- [Zig Language Reference](https://ziglang.org/documentation/master/)
-- [Zig Style Guide](https://ziglang.org/documentation/master/#Style-Guide)
+- Listed in [CONTRIBUTORS.md](docs/community/CONTRIBUTORS.md)
+- Credited in release notes
+- Acknowledged in documentation
 
----
-
-Thank you for contributing to Zeth! 🚀
-
+Thank you for contributing to Zeth! 🎉

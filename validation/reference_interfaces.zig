@@ -46,9 +46,8 @@ pub fn executeWithGeth(allocator: std.mem.Allocator, bytecode: []const u8, calld
 /// Execute bytecode using PyEVM via Python subprocess
 /// PyEVM can execute bytecode directly via Python script
 pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, calldata: []const u8) !ReferenceResult {
-    // Use the pyevm_executor_simple.py script in validation directory
-    // Note: PyEVM API integration is complex - using placeholder for now
-    const script_path = "validation/pyevm_executor_simple.py";
+    // Use the pyevm_executor.py script (the working implementation)
+    const script_path = "validation/pyevm_executor.py";
     
     // Format bytecode and calldata as hex
     var bytecode_hex = try std.ArrayList(u8).initCapacity(allocator, bytecode.len * 2);
@@ -70,14 +69,24 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
     const calldata_hex_str = try calldata_hex.toOwnedSlice(allocator);
     defer allocator.free(calldata_hex_str);
     
-    // Execute Python script using spawn and read output
-    var child = std.process.Child.init(&.{ "python3", script_path, bytecode_hex_str, calldata_hex_str }, allocator);
+    // Execute Python script using temp file for output (workaround for Zig 0.15.1 pipe reading issues)
+    const script_full_path = try std.fs.path.resolve(allocator, &.{script_path});
+    defer allocator.free(script_full_path);
+    
+    // Create unique temp file path
+    const tmp_path = try std.fmt.allocPrint(allocator, "/tmp/zeth_pyevm_{d}.json", .{std.time.timestamp()});
+    defer allocator.free(tmp_path);
+    
+    // Use shell to redirect output to temp file
+    const cmd = try std.fmt.allocPrint(allocator, "python3 {s} {s} {s} > {s} 2>&1", .{ script_full_path, bytecode_hex_str, calldata_hex_str, tmp_path });
+    defer allocator.free(cmd);
+    
+    var child = std.process.Child.init(&.{ "sh", "-c", cmd }, allocator);
     child.stdin_behavior = .Close;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
     
     child.spawn() catch |err| {
-        // Python or PyEVM not available - return placeholder
         return ReferenceResult{
             .success = false,
             .gas_used = 0,
@@ -88,7 +97,7 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
         };
     };
     
-    // Wait for process to complete first
+    // Wait for process to complete
     const term = child.wait() catch |err| {
         return ReferenceResult{
             .success = false,
@@ -100,75 +109,32 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
         };
     };
     
-    // Read stdout and stderr after process completes
-    var stdout_list = try std.ArrayList(u8).initCapacity(allocator, 0);
-    defer stdout_list.deinit(allocator);
-    var stderr_list = try std.ArrayList(u8).initCapacity(allocator, 0);
-    defer stderr_list.deinit(allocator);
-    
-    if (child.stdout) |stdout_file| {
-        var buf: [4096]u8 = undefined;
-        var reader = stdout_file.reader(&buf);
-        while (true) {
-            const bytes_read = reader.read(&buf) catch |err| {
-                if (err == error.EndOfStream) break;
-                return ReferenceResult{
-                    .success = false,
-                    .gas_used = 0,
-                    .return_data = try allocator.dupe(u8, &[_]u8{}),
-                    .stack = try allocator.alloc(types.U256, 0),
-                    .error_message = try std.fmt.allocPrint(allocator, "Failed to read stdout: {}", .{err}),
-                    .allocator = allocator,
-                };
-            };
-            if (bytes_read == 0) break;
-            try stdout_list.appendSlice(allocator, buf[0..bytes_read]);
-        }
-    }
-    
-    if (child.stderr) |stderr_file| {
-        var buf: [4096]u8 = undefined;
-        var reader = stderr_file.reader(&buf);
-        while (true) {
-            const bytes_read = reader.read(&buf) catch |err| {
-                if (err == error.EndOfStream) break;
-                return ReferenceResult{
-                    .success = false,
-                    .gas_used = 0,
-                    .return_data = try allocator.dupe(u8, &[_]u8{}),
-                    .stack = try allocator.alloc(types.U256, 0),
-                    .error_message = try std.fmt.allocPrint(allocator, "Failed to read stderr: {}", .{err}),
-                    .allocator = allocator,
-                };
-            };
-            if (bytes_read == 0) break;
-            try stderr_list.appendSlice(allocator, buf[0..bytes_read]);
-        }
-    }
-    
-    const stdout = try stdout_list.toOwnedSlice(allocator);
-    defer allocator.free(stdout);
-    const stderr = try stderr_list.toOwnedSlice(allocator);
-    defer allocator.free(stderr);
-    
-    const result = struct {
-        stdout: []const u8,
-        stderr: []const u8,
-        term: std.process.Child.Term,
-    }{
-        .stdout = stdout,
-        .stderr = stderr,
-        .term = term,
-    };
-    
-    // Parse output (format: SUCCESS:gas:return_data_hex:stack_hex)
-    if (result.term != .Exited or result.term.Exited != 0) {
+    // Read output from temp file
+    const tmp_file = std.fs.cwd().openFile(tmp_path, .{}) catch |err| {
+        // File might not exist if process failed
         return ReferenceResult{
             .success = false,
             .gas_used = 0,
             .return_data = try allocator.dupe(u8, &[_]u8{}),
             .stack = try allocator.alloc(types.U256, 0),
-            .error_message = try allocator.dupe(u8, result.stderr),
+            .error_message = try std.fmt.allocPrint(allocator, "Failed to open output file: {}", .{err}),
+            .allocator = allocator,
+        };
+    };
+    defer tmp_file.close();
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+    
+    const stdout = try tmp_file.readToEndAlloc(allocator, 1024 * 1024); // 1MB max
+    defer allocator.free(stdout);
+    
+    // Check exit code
+    if (term != .Exited or term.Exited != 0) {
+        return ReferenceResult{
+            .success = false,
+            .gas_used = 0,
+            .return_data = try allocator.dupe(u8, &[_]u8{}),
+            .stack = try allocator.alloc(types.U256, 0),
+            .error_message = try std.fmt.allocPrint(allocator, "Process exited with code {}", .{if (term == .Exited) term.Exited else 1}),
             .allocator = allocator,
         };
     }
@@ -183,7 +149,7 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
             @"error": ?[]const u8,
         },
         allocator,
-        result.stdout,
+        stdout,
         .{},
     ) catch |err| {
         return ReferenceResult{
@@ -206,12 +172,16 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
     else
         try parseHex(allocator, return_data_hex);
     
-    // Parse error if present
+    // Parse error if present (only set if error string is not null/empty)
     const error_msg = if (parsed.@"error") |err| 
-        try allocator.dupe(u8, err)
+        if (err.len > 0)
+            try allocator.dupe(u8, err)
+        else
+            null
     else
         null;
     
+    // Success is determined by parsed.success boolean, not by absence of error
     return ReferenceResult{
         .success = parsed.success,
         .gas_used = parsed.gas_used orelse 0,
@@ -286,10 +256,8 @@ pub fn isGethAvailable() bool {
 /// Check if PyEVM is available
 pub fn isPyEVMAvailable() bool {
     // Check if python3 and PyEVM are available, and script exists
-    const script_path = "validation/pyevm_executor_v3.py";
-    
-    // Check if script file exists
-    const script_file = std.fs.cwd().openFile(script_path, .{}) catch return false;
+    // Check if script file exists (use pyevm_executor.py)
+    const script_file = std.fs.cwd().openFile("validation/pyevm_executor.py", .{}) catch return false;
     script_file.close();
     
     // Check if PyEVM is importable

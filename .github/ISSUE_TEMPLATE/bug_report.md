@@ -1,43 +1,32 @@
 ---
 name: Bug Report
-about: Report a bug to help us improve Zeth
-title: '[BUG] '
-labels: bug
+about: Report a bug in Zeth
+title: '[Bug] '
+labels: 'bug'
 assignees: ''
 ---
 
-## Bug Description
-A clear and concise description of what the bug is.
+## Description
+Clear and concise description of the bug.
 
-## Steps To Reproduce
-1. Go to '...'
-2. Run command '....'
-3. See error
+## Steps to Reproduce
+1. 
+2. 
+3. 
 
 ## Expected Behavior
-A clear description of what you expected to happen.
+What should happen.
 
 ## Actual Behavior
-What actually happened.
+What actually happens.
 
 ## Environment
-- **Zig Version**: (output of `zig version`)
-- **OS**: (e.g., macOS 14.0, Ubuntu 22.04, Windows 11)
-- **Architecture**: (e.g., x86_64, aarch64)
-- **Zeth Version/Commit**: (e.g., v0.1.0 or commit hash)
+- Zig version:
+- OS:
+- Zeth version/commit:
 
 ## Additional Context
-Add any other context about the problem here.
-
-## Logs/Error Messages
-```
-Paste relevant logs or error messages here
-```
-
-## Code Sample
-If applicable, provide a minimal code sample that reproduces the issue:
-
-```zig
-// Your code here
-```
-
+- Code sample (if applicable)
+- Error messages
+- Stack traces
+- Related issues

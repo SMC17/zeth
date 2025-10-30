@@ -39,7 +39,7 @@ pub const TestRunner = struct {
         defer our_result.deinit(self.allocator);
         
         // Try to execute on reference (PyEVM or Geth)
-        const ref_result = reference.executeWithPyEVM(self.allocator, test_case.bytecode, test_case.calldata) catch |err| {
+        var ref_result = reference.executeWithPyEVM(self.allocator, test_case.bytecode, test_case.calldata) catch |err| {
             // Reference not available - skip comparison but mark test as run
             std.debug.print("Reference not available for {s}: {}\n", .{ test_case.name, err });
             return;

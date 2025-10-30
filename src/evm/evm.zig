@@ -47,6 +47,8 @@ pub const EVM = struct {
     logs: std.ArrayList(Log),
     // Track warm storage accesses for EIP-2200
     warm_storage: std.AutoHashMap(types.U256, void),
+    // Return data from last CALL/CREATE/DELEGATECALL (for RETURNDATACOPY)
+    return_data: []const u8 = &[_]u8{},
 
     pub fn init(allocator: std.mem.Allocator, gas_limit: u64) !EVM {
         return EVM{
@@ -145,12 +147,17 @@ pub const EVM = struct {
             .MUL => try self.opMul(),
             .SUB => try self.opSub(),
             .DIV => try self.opDiv(),
+            .SDIV => try self.opSdiv(),
             .MOD => try self.opMod(),
+            .SMOD => try self.opSmod(),
             .EXP => try self.opExp(),
+            .SIGNEXTEND => try self.opSignExtend(),
             
             // Comparison
             .LT => try self.opLt(),
             .GT => try self.opGt(),
+            .SLT => try self.opSlt(),
+            .SGT => try self.opSgt(),
             .EQ => try self.opEq(),
             .ISZERO => try self.opIsZero(),
             
@@ -159,8 +166,10 @@ pub const EVM = struct {
             .OR => try self.opOr(),
             .XOR => try self.opXor(),
             .NOT => try self.opNot(),
+            .BYTE => try self.opByte(),
             .SHL => try self.opShl(),
             .SHR => try self.opShr(),
+            .SAR => try self.opSar(),
             
             // Stack operations
             .POP => try self.opPop(),
@@ -256,8 +265,14 @@ pub const EVM = struct {
             .CALLVALUE => try self.opCallValue(),
             .CALLDATALOAD => try self.opCallDataLoad(),
             .CALLDATASIZE => try self.opCallDataSize(),
+            .CALLDATACOPY => try self.opCallDataCopy(),
             .CODESIZE => try self.opCodeSize(),
+            .CODECOPY => try self.opCodeCopy(),
             .GASPRICE => try self.opGasPrice(),
+            .BALANCE => try self.opBalance(),
+            .EXTCODESIZE => try self.opExtCodeSize(),
+            .EXTCODECOPY => try self.opExtCodeCopy(),
+            .EXTCODEHASH => try self.opExtCodeHash(),
             
             // Block information
             .COINBASE => try self.opCoinbase(),
@@ -277,6 +292,10 @@ pub const EVM = struct {
             .LOG2 => try self.opLog(2),
             .LOG3 => try self.opLog(3),
             .LOG4 => try self.opLog(4),
+            
+            // Return data operations
+            .RETURNDATASIZE => try self.opReturnDataSize(),
+            .RETURNDATACOPY => try self.opReturnDataCopy(),
             
             // System
             .RETURN => try self.opReturn(),
@@ -324,6 +343,92 @@ pub const EVM = struct {
         const a = try self.stack.pop(); // top
         const b = try self.stack.pop(); // second
         try self.stack.push(self.allocator, b.mod(a)); // b % a (reversed!)
+        self.gas_used += 5;
+    }
+    
+    fn opSdiv(self: *EVM) !void {
+        // Signed division: result = sign(b/a) * abs(b/a)
+        const a = try self.stack.pop();
+        const b = try self.stack.pop();
+        
+        // Handle division by zero
+        if (a.isZero()) {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += 5;
+            return;
+        }
+        
+        // For simplicity, treat as unsigned for now
+        // TODO: Implement proper signed arithmetic
+        const result = b.div(a);
+        try self.stack.push(self.allocator, result);
+        self.gas_used += 5;
+    }
+    
+    fn opSmod(self: *EVM) !void {
+        // Signed modulo: result = sign(b) * abs(b) % abs(a)
+        const a = try self.stack.pop();
+        const b = try self.stack.pop();
+        
+        // Handle modulo by zero
+        if (a.isZero()) {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += 5;
+            return;
+        }
+        
+        // For simplicity, treat as unsigned for now
+        // TODO: Implement proper signed arithmetic
+        const result = b.mod(a);
+        try self.stack.push(self.allocator, result);
+        self.gas_used += 5;
+    }
+    
+    fn opSignExtend(self: *EVM) !void {
+        // SIGNEXTEND(i, x): Extend sign of (i*8+7)th bit of x to all higher bits
+        const bit_pos_u256 = try self.stack.pop();
+        const value = try self.stack.pop();
+        
+        const bit_pos = @as(u6, @intCast(bit_pos_u256.limbs[0] & 31)); // 0-31 bytes
+        const bit_index = bit_pos * 8 + 7; // Which bit to check (0-255)
+        
+        if (bit_index >= 256) {
+            // No extension needed
+            try self.stack.push(self.allocator, value);
+            self.gas_used += 5;
+            return;
+        }
+        
+        // Check the sign bit
+        const byte_idx = bit_index / 8;
+        const bit_in_byte = bit_index % 8;
+        const sign_bit = (value.limbs[byte_idx / 4] >> @as(u6, @intCast((byte_idx % 4) * 8 + bit_in_byte))) & 1;
+        
+        // If sign bit is 1, extend with 0xFF, else with 0x00
+        var result = value;
+        if (sign_bit == 1) {
+            // Set all bits above bit_index to 1
+            const mask_start_byte = (bit_index / 8) + 1;
+            
+            // Build mask for extension (U256 has 4 limbs of u64)
+            var mask = types.U256.zero();
+            var i: usize = mask_start_byte;
+            while (i < 32) : (i += 1) {
+                const limb_idx = i / 8; // 8 bytes per limb
+                const byte_in_limb = i % 8;
+                if (limb_idx < 4) {
+                    mask.limbs[limb_idx] |= @as(u64, 0xFF) << @as(u6, @intCast(byte_in_limb * 8));
+                }
+            }
+            
+            // Apply mask
+            result.limbs[0] |= mask.limbs[0];
+            result.limbs[1] |= mask.limbs[1];
+            result.limbs[2] |= mask.limbs[2];
+            result.limbs[3] |= mask.limbs[3];
+        }
+        
+        try self.stack.push(self.allocator, result);
         self.gas_used += 5;
     }
     
@@ -382,6 +487,50 @@ pub const EVM = struct {
         self.gas_used += 3;
     }
     
+    fn opSlt(self: *EVM) !void {
+        // Signed less than
+        const a = try self.stack.pop();
+        const b = try self.stack.pop();
+        
+        // Check if negative (MSB is set)
+        const a_is_neg = (a.limbs[3] & 0x8000000000000000) != 0;
+        const b_is_neg = (b.limbs[3] & 0x8000000000000000) != 0;
+        
+        var result: bool = false;
+        if (b_is_neg != a_is_neg) {
+            // Different signs: negative < positive
+            result = b_is_neg;
+        } else {
+            // Same sign: compare as unsigned
+            result = b.lt(a);
+        }
+        
+        try self.stack.push(self.allocator, if (result) types.U256.one() else types.U256.zero());
+        self.gas_used += 3;
+    }
+    
+    fn opSgt(self: *EVM) !void {
+        // Signed greater than (opposite of SLT)
+        const a = try self.stack.pop();
+        const b = try self.stack.pop();
+        
+        // Check if negative (MSB is set)
+        const a_is_neg = (a.limbs[3] & 0x8000000000000000) != 0;
+        const b_is_neg = (b.limbs[3] & 0x8000000000000000) != 0;
+        
+        var result: bool = false;
+        if (b_is_neg != a_is_neg) {
+            // Different signs: positive > negative
+            result = !b_is_neg;
+        } else {
+            // Same sign: compare as unsigned
+            result = b.gt(a);
+        }
+        
+        try self.stack.push(self.allocator, if (result) types.U256.one() else types.U256.zero());
+        self.gas_used += 3;
+    }
+    
     fn opIsZero(self: *EVM) !void {
         const a = try self.stack.pop();
         const result = if (a.isZero()) types.U256.one() else types.U256.zero();
@@ -433,6 +582,31 @@ pub const EVM = struct {
         self.gas_used += 3;
     }
     
+    fn opByte(self: *EVM) !void {
+        // BYTE(i, x): ith byte of x, where i=0 is MSB and i=31 is LSB
+        const i_u256 = try self.stack.pop();
+        const x = try self.stack.pop();
+        
+        const i = i_u256.limbs[0];
+        if (i >= 32) {
+            // Index out of range, return 0
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += 3;
+            return;
+        }
+        
+        // Extract byte (i=0 is MSB, i=31 is LSB)
+        const byte_idx = 31 - @as(u6, @intCast(i)); // Reverse: 0=LSB, 31=MSB in our representation
+        const limb_idx = byte_idx / 8;
+        const byte_in_limb = byte_idx % 8;
+        const byte_val = @as(u8, @truncate((x.limbs[limb_idx] >> @as(u6, @intCast(byte_in_limb * 8))) & 0xFF));
+        
+        var result = types.U256.zero();
+        result.limbs[0] = byte_val;
+        try self.stack.push(self.allocator, result);
+        self.gas_used += 3;
+    }
+    
     fn opShl(self: *EVM) !void {
         const shift = try self.stack.pop();
         const value = try self.stack.pop();
@@ -446,6 +620,33 @@ pub const EVM = struct {
         const value = try self.stack.pop();
         _ = shift;
         try self.stack.push(self.allocator, value); // TODO: Implement shift
+        self.gas_used += 3;
+    }
+    
+    fn opSar(self: *EVM) !void {
+        // SAR (Signed Arithmetic Right Shift): preserves sign bit
+        const shift_u256 = try self.stack.pop();
+        const value = try self.stack.pop();
+        
+        const shift = shift_u256.limbs[0];
+        if (shift >= 256) {
+            // Shift >= 256: result is all sign bits
+            const sign_bit = value.limbs[3] >> 63; // MSB of highest limb
+            var result = types.U256.zero();
+            if (sign_bit != 0) {
+                result.limbs[0] = 0xFFFFFFFFFFFFFFFF;
+                result.limbs[1] = 0xFFFFFFFFFFFFFFFF;
+                result.limbs[2] = 0xFFFFFFFFFFFFFFFF;
+                result.limbs[3] = 0xFFFFFFFFFFFFFFFF;
+            }
+            try self.stack.push(self.allocator, result);
+            self.gas_used += 3;
+            return;
+        }
+        
+        // For now, implement as logical shift (same as SHR)
+        // TODO: Proper signed arithmetic right shift preserving sign
+        try self.stack.push(self.allocator, value);
         self.gas_used += 3;
     }
     
@@ -555,10 +756,114 @@ pub const EVM = struct {
         self.gas_used += 2;
     }
     
+    fn opCallDataCopy(self: *EVM) !void {
+        // Stack: memOffset, calldataOffset, length
+        const mem_offset_u256 = try self.stack.pop();
+        const calldata_offset_u256 = try self.stack.pop();
+        const length_u256 = try self.stack.pop();
+        
+        const mem_offset = mem_offset_u256.limbs[0];
+        const calldata_offset = calldata_offset_u256.limbs[0];
+        const length = length_u256.limbs[0];
+        
+        // Calculate required memory size
+        const new_size = if (length > 0 and mem_offset < 0xFFFFFFFFFFFFFFFF) 
+            @min(mem_offset + length, 0xFFFFFFFF) 
+        else 
+            mem_offset;
+        
+        // Expand memory if needed
+        if (new_size > self.memory.data.items.len) {
+            try self.memory.data.resize(self.allocator, new_size);
+        }
+        
+        // Copy from calldata to memory
+        if (length > 0 and calldata_offset < self.context.calldata.len) {
+            const src_end = @min(calldata_offset + length, self.context.calldata.len);
+            const copy_len = src_end - calldata_offset;
+            
+            // Copy actual data
+            if (copy_len > 0) {
+                @memcpy(
+                    self.memory.data.items[mem_offset..][0..copy_len],
+                    self.context.calldata[calldata_offset..src_end]
+                );
+            }
+            
+            // Zero out remaining bytes if length exceeds available calldata
+            if (copy_len < length) {
+                @memset(
+                    self.memory.data.items[mem_offset + copy_len..][0..length - copy_len],
+                    0
+                );
+            }
+        } else if (length > 0) {
+            // Calldata offset beyond available data - zero out memory
+            @memset(self.memory.data.items[mem_offset..][0..length], 0);
+        }
+        
+        // Gas cost: 3 base + memory expansion + copy cost
+        const mem_cost = self.memoryExpansionCost(new_size);
+        const copy_cost = (length + 31) / 32; // Words to copy (minimum 1)
+        self.gas_used += 3 + mem_cost + copy_cost;
+    }
+    
     fn opCodeSize(self: *EVM) !void {
         const size = types.U256.fromU64(self.context.code.len);
         try self.stack.push(self.allocator, size);
         self.gas_used += 2;
+    }
+    
+    fn opCodeCopy(self: *EVM) !void {
+        // Stack: memOffset, codeOffset, length
+        const mem_offset_u256 = try self.stack.pop();
+        const code_offset_u256 = try self.stack.pop();
+        const length_u256 = try self.stack.pop();
+        
+        const mem_offset = mem_offset_u256.limbs[0];
+        const code_offset = code_offset_u256.limbs[0];
+        const length = length_u256.limbs[0];
+        
+        // Calculate required memory size
+        const new_size = if (length > 0 and mem_offset < 0xFFFFFFFFFFFFFFFF) 
+            @min(mem_offset + length, 0xFFFFFFFF) 
+        else 
+            mem_offset;
+        
+        // Expand memory if needed
+        if (new_size > self.memory.data.items.len) {
+            try self.memory.data.resize(self.allocator, new_size);
+        }
+        
+        // Copy from code to memory
+        if (length > 0 and code_offset < self.context.code.len) {
+            const src_end = @min(code_offset + length, self.context.code.len);
+            const copy_len = src_end - code_offset;
+            
+            // Copy actual data
+            if (copy_len > 0) {
+                @memcpy(
+                    self.memory.data.items[mem_offset..][0..copy_len],
+                    self.context.code[code_offset..src_end]
+                );
+            }
+            
+            // Zero out remaining bytes if length exceeds available code
+            if (copy_len < length) {
+                @memset(
+                    self.memory.data.items[mem_offset + copy_len..][0..length - copy_len],
+                    0
+                );
+            }
+        } else if (length > 0) {
+            // Code offset beyond available code - zero out memory
+            @memset(self.memory.data.items[mem_offset..][0..length], 0);
+        }
+        
+        // Gas cost: 3 base + memory expansion + copy cost
+        const mem_cost = self.memoryExpansionCost(new_size);
+        const copy_cost = (length + 31) / 32; // Words to copy (minimum 1)
+        self.gas_used += 3 + mem_cost + copy_cost;
     }
     
     fn opGasPrice(self: *EVM) !void {
@@ -566,6 +871,82 @@ pub const EVM = struct {
         const price = types.U256.fromU64(20000000000); // 20 gwei
         try self.stack.push(self.allocator, price);
         self.gas_used += 2;
+    }
+    
+    fn opBalance(self: *EVM) !void {
+        // BALANCE(address): Get balance of account at address
+        const address_u256 = try self.stack.pop();
+        _ = address_u256; // TODO: Look up actual balance in state
+        
+        // For now, return 0 (no balance tracking yet)
+        try self.stack.push(self.allocator, types.U256.zero());
+        
+        // EIP-2929: Cold access charge for first access to account
+        // TODO: Track warm account accesses
+        self.gas_used += 100; // Simplified: warm access cost
+    }
+    
+    fn opExtCodeSize(self: *EVM) !void {
+        // EXTCODESIZE(address): Get size of code at address
+        const address_u256 = try self.stack.pop();
+        _ = address_u256; // TODO: Look up actual code in state
+        
+        // For now, return 0 (no external code tracking yet)
+        try self.stack.push(self.allocator, types.U256.zero());
+        
+        // EIP-2929: Cold access charge for first access to account
+        // TODO: Track warm account accesses
+        self.gas_used += 100; // Simplified: warm access cost
+    }
+    
+    fn opExtCodeCopy(self: *EVM) !void {
+        // EXTCODECOPY(address, memOffset, codeOffset, length): Copy code from external account to memory
+        const address_u256 = try self.stack.pop();
+        const mem_offset_u256 = try self.stack.pop();
+        const code_offset_u256 = try self.stack.pop();
+        const length_u256 = try self.stack.pop();
+        
+        _ = address_u256; // TODO: Look up actual code in state
+        _ = code_offset_u256; // TODO: Use code offset when copying actual code
+        
+        const mem_offset = mem_offset_u256.limbs[0];
+        const length = length_u256.limbs[0];
+        
+        // Calculate required memory size
+        const new_size = if (length > 0 and mem_offset < 0xFFFFFFFFFFFFFFFF) 
+            @min(mem_offset + length, 0xFFFFFFFF) 
+        else 
+            mem_offset;
+        
+        // Expand memory if needed
+        if (new_size > self.memory.data.items.len) {
+            try self.memory.data.resize(self.allocator, new_size);
+        }
+        
+        // TODO: Copy actual external code
+        // For now, zero out memory
+        if (length > 0) {
+            @memset(self.memory.data.items[mem_offset..][0..length], 0);
+        }
+        
+        // Gas cost: 20 base + 100 cold access (EIP-2929) + memory expansion + copy cost
+        const mem_cost = self.memoryExpansionCost(new_size);
+        const copy_cost = (length + 31) / 32; // Words to copy (minimum 1)
+        self.gas_used += 20 + 100 + mem_cost + copy_cost; // EIP-2929 cold access included
+    }
+    
+    fn opExtCodeHash(self: *EVM) !void {
+        // EXTCODEHASH(address): Get hash of code at address (EIP-1052)
+        const address_u256 = try self.stack.pop();
+        _ = address_u256; // TODO: Look up actual code in state and hash it
+        
+        // For now, return 0 (no external code tracking yet)
+        // In real EVM, returns keccak256(code) or 0 if account doesn't exist
+        try self.stack.push(self.allocator, types.U256.zero());
+        
+        // EIP-2929: Cold access charge for first access to account
+        // TODO: Track warm account accesses
+        self.gas_used += 100; // Simplified: warm access cost
     }
     
     // Block information opcodes
@@ -865,41 +1246,43 @@ pub const EVM = struct {
         const new_value = try self.stack.pop();
         const current_value = self.storage.load(key) catch types.U256.zero();
         
+        // EIP-2929: Cold access charge (applied before SSTORE operation cost)
         // EIP-2200: Complex SSTORE gas rules
-        // Simplified implementation:
-        // - If current == new: 100 (warm) or 2100 (cold)
-        // - If current != 0 and new == 0: refund 4800
-        // - If current == 0 and new != 0: 20000 (cold) or 2900 (warm)
-        // - If current != 0 and new != 0 and current != new: 5000 (warm) or 2900 (cold, but then becomes warm)
+        // SSTORE costs = cold access charge (if cold) + SSTORE operation cost
         
         const is_warm = self.warm_storage.contains(key);
         
+        // EIP-2929: Charge cold access cost if this is the first access in transaction
+        if (!is_warm) {
+            self.gas_used += 2100; // Cold access charge
+            try self.warm_storage.put(key, {}); // Mark as warm for subsequent accesses
+        }
+        
+        // EIP-2200: SSTORE operation costs based on value transitions
         if (current_value.eq(new_value)) {
-            // No change
-            self.gas_used += if (is_warm) 100 else 2100;
-        } else if (!current_value.isZero() and new_value.isZero()) {
-            // Delete (refund)
+            // No change: additional cost (cold access already charged above)
             if (is_warm) {
-                self.gas_used += 100;
+                self.gas_used += 100; // Warm: just operation cost
+            }
+            // Cold: already charged 2100 above, no additional cost for no-change
+        } else if (!current_value.isZero() and new_value.isZero()) {
+            // Delete: operation cost
+            if (is_warm) {
+                self.gas_used += 100; // Warm delete
             } else {
-                self.gas_used += 2100;
+                // Cold delete: 2100 already charged, operation cost is 0 (refund case)
             }
             // Refund handled separately (not implemented yet)
         } else if (current_value.isZero() and !new_value.isZero()) {
-            // Set new value
-            if (is_warm) {
-                self.gas_used += 2900;
-            } else {
-                self.gas_used += 20000;
-                try self.warm_storage.put(key, {}); // Mark as warm
-            }
+            // Set new value: 20000 gas for the SSTORE operation
+            self.gas_used += 20000;
         } else {
-            // Update existing value
+            // Update existing value: operation cost
             if (is_warm) {
-                self.gas_used += 5000;
+                self.gas_used += 5000; // Warm update
             } else {
-                self.gas_used += 2900;
-                try self.warm_storage.put(key, {}); // Mark as warm
+                // Cold update: 2100 already charged, add operation cost
+                self.gas_used += 800; // 2900 - 2100 = 800 (since we already charged cold access)
             }
         }
         
@@ -923,9 +1306,65 @@ pub const EVM = struct {
     }
 
     fn opReturn(self: *EVM) !void {
-        _ = try self.stack.pop(); // offset
-        _ = try self.stack.pop(); // length
+        const offset_u256 = try self.stack.pop();
+        const length_u256 = try self.stack.pop();
+        const offset = offset_u256.limbs[0];
+        const length = length_u256.limbs[0];
+        
+        // Extract return data from memory
+        // In real implementation, this would be used to construct ExecutionResult
+        // For now, we just mark it for future use
+        _ = offset;
+        _ = length;
         self.gas_used += 0;
+    }
+    
+    fn opReturnDataSize(self: *EVM) !void {
+        // Return size of data from last CALL/CREATE/DELEGATECALL
+        // For now, return 0 (will be populated when CALL operations return data)
+        const size = types.U256.fromU64(self.return_data.len);
+        try self.stack.push(self.allocator, size);
+        self.gas_used += 2;
+    }
+    
+    fn opReturnDataCopy(self: *EVM) !void {
+        // Stack: memOffset, returnDataOffset, length
+        const mem_offset_u256 = try self.stack.pop();
+        const return_data_offset_u256 = try self.stack.pop();
+        const length_u256 = try self.stack.pop();
+        
+        const mem_offset = mem_offset_u256.limbs[0];
+        const return_data_offset = return_data_offset_u256.limbs[0];
+        const length = length_u256.limbs[0];
+        
+        // Check bounds - revert if out of bounds
+        if (return_data_offset + length > self.return_data.len) {
+            return error.Revert; // Out of bounds access
+        }
+        
+        // Calculate required memory size
+        const new_size = if (length > 0 and mem_offset < 0xFFFFFFFFFFFFFFFF) 
+            @min(mem_offset + length, 0xFFFFFFFF) 
+        else 
+            mem_offset;
+        
+        // Expand memory if needed
+        if (new_size > self.memory.data.items.len) {
+            try self.memory.data.resize(self.allocator, new_size);
+        }
+        
+        // Copy from return data to memory
+        if (length > 0) {
+            @memcpy(
+                self.memory.data.items[mem_offset..][0..length],
+                self.return_data[return_data_offset..return_data_offset + length]
+            );
+        }
+        
+        // Gas cost: 3 base + memory expansion + copy cost
+        const mem_cost = self.memoryExpansionCost(new_size);
+        const copy_cost = (length + 31) / 32; // Words to copy (minimum 1)
+        self.gas_used += 3 + mem_cost + copy_cost;
     }
 };
 
@@ -1190,6 +1629,10 @@ pub const ExecutionResult = struct {
     gas_used: u64,
     return_data: []const u8,
     logs: []const Log,
+    
+    // Store return data for RETURNDATACOPY
+    return_data_allocator: ?std.mem.Allocator = null,
+    return_data_owned: ?[]u8 = null,
 };
 
 pub const Log = struct {

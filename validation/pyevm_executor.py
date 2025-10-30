@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
 PyEVM bytecode executor for Zeth reference testing
-Executes EVM bytecode and returns structured results
+Uses BerlinComputation.apply_message to execute bytecode
 """
 
 import sys
 import json
-from eth import constants
-from eth.vm import VM
-from eth.vm.forks import BerlinVM
 from eth.vm.message import Message
-from eth.vm.state import BlockChainDB
 from eth.constants import ZERO_ADDRESS
 from eth.db.backends.memory import MemoryDB
+from eth.vm.forks.berlin import BerlinState
+from eth.vm.execution_context import ExecutionContext
+from eth.constants import BLANK_ROOT_HASH
+from eth_utils import to_canonical_address
+from eth.vm.transaction_context import BaseTransactionContext
+from eth.vm.forks.berlin.computation import BerlinComputation
 
 def execute_bytecode(bytecode_hex: str, calldata_hex: str = "") -> dict:
     """
@@ -21,20 +23,42 @@ def execute_bytecode(bytecode_hex: str, calldata_hex: str = "") -> dict:
     """
     try:
         # Convert hex strings to bytes
-        bytecode = bytes.fromhex(bytecode_hex.replace("0x", ""))
-        calldata = bytes.fromhex(calldata_hex.replace("0x", "")) if calldata_hex else b""
+        bytecode_str = bytecode_hex.replace("0x", "")
+        if len(bytecode_str) % 2 != 0:
+            return {
+                "success": False,
+                "gas_used": 0,
+                "return_data": "0x",
+                "stack": [],
+                "error": "Invalid bytecode hex length",
+            }
+        bytecode = bytes.fromhex(bytecode_str)
+        
+        calldata_str = calldata_hex.replace("0x", "") if calldata_hex else ""
+        calldata = bytes.fromhex(calldata_str) if calldata_str else b""
         
         # Create in-memory database
         db = MemoryDB()
-        chaindb = BlockChainDB(db)
         
-        # Create VM (Berlin fork - supports EIP-2929, EIP-2200)
-        vm = BerlinVM(chaindb)
+        # Create execution context
+        execution_context = ExecutionContext(
+            coinbase=to_canonical_address(ZERO_ADDRESS),
+            timestamp=0,
+            block_number=0,
+            difficulty=0,
+            gas_limit=1000000,
+            prev_hashes=(),
+            chain_id=1,
+            mix_hash=b'\x00' * 32,
+        )
+        
+        # Create state
+        state = BerlinState(db, execution_context, BLANK_ROOT_HASH)
         
         # Create message for execution
         message = Message(
-            to=ZERO_ADDRESS,
-            sender=ZERO_ADDRESS,
+            to=to_canonical_address(ZERO_ADDRESS),
+            sender=to_canonical_address(ZERO_ADDRESS),
             value=0,
             data=calldata,
             code=bytecode,
@@ -42,13 +66,14 @@ def execute_bytecode(bytecode_hex: str, calldata_hex: str = "") -> dict:
         )
         
         # Create transaction context
-        tx_context = vm.create_transaction_context(
-            message=message,
-            transaction=message,
+        tx_context = BaseTransactionContext(
+            gas_price=0,
+            origin=to_canonical_address(ZERO_ADDRESS),
         )
         
-        # Execute
-        computation = vm.execute_computation(message, tx_context)
+        # Execute computation using BerlinComputation.apply_message
+        # This is the correct way to execute bytecode in PyEVM
+        computation = BerlinComputation.apply_message(state, message, tx_context)
         
         if computation.is_error:
             return {
@@ -61,27 +86,24 @@ def execute_bytecode(bytecode_hex: str, calldata_hex: str = "") -> dict:
         
         # Extract return data
         return_data = computation.output or b""
-        return_data_hex = "0x" + return_data.hex()
-        
-        # Extract stack (simplified - PyEVM doesn't expose stack directly)
-        # We'd need to modify execution to capture stack
-        stack = []
+        return_data_hex = "0x" + return_data.hex() if return_data else "0x"
         
         return {
-            "success": True,
+            "success": computation.is_success,
             "gas_used": computation.get_gas_used(),
             "return_data": return_data_hex,
-            "stack": stack,
+            "stack": [],  # Stack not directly accessible in PyEVM
             "error": None,
         }
         
     except Exception as e:
+        import traceback
         return {
             "success": False,
             "gas_used": 0,
             "return_data": "0x",
             "stack": [],
-            "error": str(e),
+            "error": f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}",
         }
 
 if __name__ == "__main__":
@@ -97,4 +119,3 @@ if __name__ == "__main__":
     
     result = execute_bytecode(bytecode_hex, calldata_hex)
     print(json.dumps(result))
-

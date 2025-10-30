@@ -52,6 +52,13 @@ pub const ExecutionComparison = struct {
     }
     
     pub fn deinit(self: *ExecutionComparison, allocator: std.mem.Allocator) void {
+        // Free all discrepancy strings that were duplicated in addDiscrepancy
+        for (self.discrepancies.items) |disc| {
+            allocator.free(disc.category);
+            allocator.free(disc.description);
+            allocator.free(disc.our_value);
+            allocator.free(disc.reference_value);
+        }
         allocator.free(self.our_stack);
         allocator.free(self.our_memory);
         self.our_storage.deinit(allocator);
@@ -59,11 +66,17 @@ pub const ExecutionComparison = struct {
     }
     
     pub fn addDiscrepancy(self: *ExecutionComparison, category: []const u8, description: []const u8, our_val: []const u8, ref_val: []const u8, allocator: std.mem.Allocator) !void {
+        // Duplicate strings so they outlive the caller's scope
+        const cat_dup = try allocator.dupe(u8, category);
+        const desc_dup = try allocator.dupe(u8, description);
+        const our_dup = try allocator.dupe(u8, our_val);
+        const ref_dup = try allocator.dupe(u8, ref_val);
+        
         try self.discrepancies.append(allocator, Discrepancy{
-            .category = category,
-            .description = description,
-            .our_value = our_val,
-            .reference_value = ref_val,
+            .category = cat_dup,
+            .description = desc_dup,
+            .our_value = our_dup,
+            .reference_value = ref_dup,
         });
         self.matches = false;
     }

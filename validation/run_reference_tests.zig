@@ -59,6 +59,10 @@ pub fn main() !void {
             };
             defer ref_result.deinit();
             
+            // Debug: Print what we got from PyEVM
+            std.debug.print("  [DEBUG] PyEVM: success={}, gas={}, error={s}\n", .{ ref_result.success, ref_result.gas_used, ref_result.error_message orelse "none" });
+            std.debug.print("  [DEBUG] Our EVM: success={}, gas={}\n", .{ our_result.our_result.success, our_result.our_gas });
+            
             // Compare
             const ref_wrapped = comparison.ExecutionComparison.ReferenceResult{
                 .success = ref_result.success,

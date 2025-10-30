@@ -1,7 +1,16 @@
 # Zig build artifacts
-zig-cache/
 zig-out/
+zig-cache/
 .zig-cache/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
 
 # IDE
 .vscode/
@@ -14,14 +23,6 @@ zig-out/
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
-
-# Database
-*.db
-data/
-
-# Testing
-test-data/
-
-ethereum-tests/
+# Temporary files
+/tmp/zeth_*
+*.tmp
