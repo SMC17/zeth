@@ -84,23 +84,23 @@ pub const DiscrepancyTracker = struct {
     }
     
     pub fn countBySeverity(self: *const DiscrepancyTracker, severity: Discrepancy.Severity) usize {
-        var count: usize = 0;
+        var counter: usize = 0;
         for (self.discrepancies.items) |disc| {
             if (disc.severity == severity) {
-                count += 1;
+                counter += 1;
             }
         }
-        return count;
+        return counter;
     }
     
     pub fn countByType(self: *const DiscrepancyTracker, disc_type: DiscrepancyType) usize {
-        var count: usize = 0;
+        var counter: usize = 0;
         for (self.discrepancies.items) |disc| {
             if (disc.type == disc_type) {
-                count += 1;
+                counter += 1;
             }
         }
-        return count;
+        return counter;
     }
     
     pub fn formatReport(self: *const DiscrepancyTracker, writer: anytype) !void {

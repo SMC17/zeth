@@ -130,7 +130,7 @@ test "Test runner: Basic functionality" {
     // (may fail if reference not available, which is ok)
 }
 
-/// Main test suite - runs all opcodes against reference
+// Main test suite - runs all opcodes against reference
 test "Reference comparison: Run all critical tests" {
     const testing_allocator = testing.allocator;
     var runner = TestRunner.init(testing_allocator);

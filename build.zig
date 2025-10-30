@@ -415,4 +415,26 @@ pub fn build(b: *std.Build) void {
     });
     const run_reference_test_runner_tests = b.addRunArtifact(reference_test_runner_tests);
     test_step.dependOn(&run_reference_test_runner_tests.step);
+    
+    // Reference test runner executable
+    const reference_test_exe_mod = b.createModule(.{
+        .root_source_file = b.path("validation/run_reference_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    reference_test_exe_mod.addImport("evm", evm_mod);
+    reference_test_exe_mod.addImport("types", types_mod);
+    reference_test_exe_mod.addImport("comparison_tool", comparison_test_mod);
+    reference_test_exe_mod.addImport("reference_interfaces", reference_interfaces_mod);
+    reference_test_exe_mod.addImport("discrepancy_tracker", discrepancy_tracker_mod);
+    
+    const reference_test_exe = b.addExecutable(.{
+        .name = "run_reference_tests",
+        .root_module = reference_test_exe_mod,
+    });
+    b.installArtifact(reference_test_exe);
+    
+    const run_reference_test_exe = b.addRunArtifact(reference_test_exe);
+    const reference_test_cmd = b.addStep("reference-tests", "Run reference comparison tests");
+    reference_test_cmd.dependOn(&run_reference_test_exe.step);
 }

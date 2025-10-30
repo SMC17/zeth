@@ -288,7 +288,7 @@ pub const critical_opcode_tests = [_]OpcodeTestCase{
 
 /// Run test case and verify
 pub fn runTestCase(allocator: std.mem.Allocator, test_case: OpcodeTestCase) !ExecutionComparison {
-    const comparison = try executeOurEVM(allocator, test_case.bytecode, test_case.calldata, 1000000);
+    var comparison = try executeOurEVM(allocator, test_case.bytecode, test_case.calldata, 1000000);
     
     // Verify expected values if provided
     if (test_case.expected_stack_top) |expected| {
@@ -310,7 +310,7 @@ pub fn runTestCase(allocator: std.mem.Allocator, test_case: OpcodeTestCase) !Exe
             defer allocator.free(actual_str);
             const expected_str = try std.fmt.allocPrint(allocator, "{}", .{expected_gas});
             defer allocator.free(expected_str);
-                try comparison.addDiscrepancy("Gas", "Gas cost differs", actual_str, expected_str, allocator);
+            try comparison.addDiscrepancy("Gas", "Gas cost differs", actual_str, expected_str, allocator);
         }
     }
     

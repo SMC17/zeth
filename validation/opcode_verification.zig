@@ -7,7 +7,7 @@ const comparison = @import("comparison_tool");
 // Systematic opcode verification against Ethereum specification
 // Tests opcodes individually and in combinations
 
-/// Verify arithmetic opcodes
+// Verify arithmetic opcodes
 test "Verify: Arithmetic opcodes" {
     const allocator = testing.allocator;
     
@@ -36,7 +36,7 @@ test "Verify: Arithmetic opcodes" {
     try testing.expectEqual(@as(u64, 5), div_result.limbs[0]);
 }
 
-/// Verify comparison opcodes
+// Verify comparison opcodes
 test "Verify: Comparison opcodes" {
     const allocator = testing.allocator;
     var vm = try evm.EVM.init(allocator, 1000000);
