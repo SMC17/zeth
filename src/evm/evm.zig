@@ -245,17 +245,24 @@ pub const EVM = struct {
     }
 
     fn u256ToAddress(value: types.U256) types.Address {
-        var address_bytes: [20]u8 = undefined;
-        const value_bytes = value.toBytes();
-        @memcpy(&address_bytes, value_bytes[12..32]);
+        var address_bytes: [20]u8 = [_]u8{0} ** 20;
+        // Address is the low 160 bits of the integer, interpreted as big-endian bytes.
+        for (0..20) |i| {
+            const limb_idx = i / 8;
+            const byte_in_limb: u6 = @intCast((i % 8) * 8);
+            const b = @as(u8, @truncate((value.limbs[limb_idx] >> byte_in_limb) & 0xff));
+            address_bytes[19 - i] = b;
+        }
         return types.Address{ .bytes = address_bytes };
     }
 
     fn addressToU256(address: types.Address) types.U256 {
         var value = types.U256.zero();
-        var result_bytes = value.toBytes();
-        @memcpy(result_bytes[12..32], address.bytes[0..20]);
-        value = types.U256.fromBytes(result_bytes);
+        for (0..20) |i| {
+            const limb_idx = i / 8;
+            const shift: u6 = @intCast((i % 8) * 8);
+            value.limbs[limb_idx] |= (@as(u64, address.bytes[19 - i]) << shift);
+        }
         return value;
     }
 
@@ -974,35 +981,17 @@ pub const EVM = struct {
 
     // Environmental opcodes
     fn opAddress(self: *EVM) !void {
-        var value = types.U256.zero();
-        // Address is 20 bytes, store in last 20 bytes of U256 (bytes 12-31 in big-endian)
-        // U256 is 32 bytes: bytes[0] is MSB, bytes[31] is LSB
-        // Address goes in bytes[12..32] (last 20 bytes)
-        const addr_bytes = self.context.address.bytes;
-        var result_bytes = value.toBytes();
-        @memcpy(result_bytes[12..32], addr_bytes[0..20]);
-        value = types.U256.fromBytes(result_bytes);
-        try self.stack.push(self.allocator, value);
+        try self.stack.push(self.allocator, addressToU256(self.context.address));
         self.gas_used += 2;
     }
 
     fn opCaller(self: *EVM) !void {
-        var value = types.U256.zero();
-        const caller_bytes = self.context.caller.bytes;
-        var result_bytes = value.toBytes();
-        @memcpy(result_bytes[12..32], caller_bytes[0..20]);
-        value = types.U256.fromBytes(result_bytes);
-        try self.stack.push(self.allocator, value);
+        try self.stack.push(self.allocator, addressToU256(self.context.caller));
         self.gas_used += 2;
     }
 
     fn opOrigin(self: *EVM) !void {
-        var value = types.U256.zero();
-        const origin_bytes = self.context.origin.bytes;
-        var result_bytes = value.toBytes();
-        @memcpy(result_bytes[12..32], origin_bytes[0..20]);
-        value = types.U256.fromBytes(result_bytes);
-        try self.stack.push(self.allocator, value);
+        try self.stack.push(self.allocator, addressToU256(self.context.origin));
         self.gas_used += 2;
     }
 
@@ -1142,12 +1131,7 @@ pub const EVM = struct {
     fn opBalance(self: *EVM) !void {
         // BALANCE(address): Get balance of account at address
         const address_u256 = try self.stack.pop();
-
-        // Extract address from U256 (last 20 bytes)
-        var address_bytes: [20]u8 = undefined;
-        const value_bytes = address_u256.toBytes();
-        @memcpy(&address_bytes, value_bytes[12..32]);
-        const address = types.Address{ .bytes = address_bytes };
+        const address = u256ToAddress(address_u256);
 
         // Look up balance from state if available
         if (self.state_db) |db| {
@@ -1449,6 +1433,7 @@ pub const EVM = struct {
         caller: types.Address,
         call_value: types.U256,
         gas_limit: u64,
+        base_gas: u64,
         args_offset: u64,
         args_length: u64,
         ret_offset: u64,
@@ -1475,14 +1460,16 @@ pub const EVM = struct {
                 child_ctx.code = target_code;
                 child_ctx.calldata = calldata;
 
-                var child = try EVM.initWithState(self.allocator, gas_limit, child_ctx, db);
+                const available_gas = self.gas_limit -| self.gas_used;
+                const child_gas = @min(gas_limit, available_gas);
+                var child = try EVM.initWithState(self.allocator, child_gas, child_ctx, db);
                 defer child.deinit();
 
                 const child_result = child.execute(target_code, calldata) catch {
                     call_success = false;
                     try self.setReturnData(&[_]u8{});
                     try self.stack.push(self.allocator, types.U256.zero());
-                    self.gas_used += 700 + try self.accountAccessCost(code_address);
+                    self.gas_used += base_gas;
                     return false;
                 };
 
@@ -1497,7 +1484,7 @@ pub const EVM = struct {
         const mem_cost = try self.writeCallReturn(ret_offset, ret_length, return_data_local);
         try self.setReturnData(return_data_local);
         try self.stack.push(self.allocator, if (call_success) types.U256.one() else types.U256.zero());
-        self.gas_used += 700 + mem_cost + try self.accountAccessCost(code_address);
+        self.gas_used += base_gas + mem_cost;
 
         // Merge child logs only for successful calls.
         if (call_success and child_logs.len > 0) {
@@ -1521,12 +1508,22 @@ pub const EVM = struct {
         const ret_length = try self.stack.pop();
 
         const target = u256ToAddress(address_u256);
+        var base_gas: u64 = 700 + try self.accountAccessCost(target);
+        if (!value.isZero()) {
+            base_gas += 9000;
+            if (self.state_db) |db| {
+                if (!db.exists(target)) {
+                    base_gas += 25000;
+                }
+            }
+        }
         _ = try self.executeCallFrame(
             target,
             target,
             self.context.address,
             value,
             gas.limbs[0],
+            base_gas,
             args_offset.limbs[0],
             args_length.limbs[0],
             ret_offset.limbs[0],
@@ -1543,12 +1540,14 @@ pub const EVM = struct {
         const ret_length = try self.stack.pop();
 
         const target = u256ToAddress(address_u256);
+        const base_gas: u64 = 700 + try self.accountAccessCost(target);
         _ = try self.executeCallFrame(
             target,
             target,
             self.context.address,
             types.U256.zero(),
             gas.limbs[0],
+            base_gas,
             args_offset.limbs[0],
             args_length.limbs[0],
             ret_offset.limbs[0],
@@ -1566,12 +1565,17 @@ pub const EVM = struct {
         const ret_length = try self.stack.pop();
 
         const code_addr = u256ToAddress(address_u256);
+        var base_gas: u64 = 700 + try self.accountAccessCost(code_addr);
+        if (!value.isZero()) {
+            base_gas += 9000;
+        }
         _ = try self.executeCallFrame(
             code_addr,
             self.context.address,
             self.context.address,
             value,
             gas.limbs[0],
+            base_gas,
             args_offset.limbs[0],
             args_length.limbs[0],
             ret_offset.limbs[0],
@@ -1588,12 +1592,14 @@ pub const EVM = struct {
         const ret_length = try self.stack.pop();
 
         const target = u256ToAddress(address_u256);
+        const base_gas: u64 = 700 + try self.accountAccessCost(target);
         _ = try self.executeCallFrame(
             target,
             self.context.address,
             self.context.caller,
             self.context.value,
             gas.limbs[0],
+            base_gas,
             args_offset.limbs[0],
             args_length.limbs[0],
             ret_offset.limbs[0],
@@ -1608,10 +1614,18 @@ pub const EVM = struct {
         const length = try self.stack.pop();
         const init_code = try self.readMemoryInput(offset.limbs[0], length.limbs[0]);
         defer self.allocator.free(init_code);
+        const words = (length.limbs[0] + 31) / 32;
+        const copy_gas = words * 3;
+        const new_size = if (length.limbs[0] > 0 and offset.limbs[0] < 0xFFFFFFFFFFFFFFFF)
+            @min(offset.limbs[0] + length.limbs[0], 0xFFFFFFFF)
+        else
+            @as(u64, @intCast(self.memory.data.items.len));
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
+        const create_gas = 32000 + mem_cost + copy_gas;
 
         if (self.state_db == null) {
             try self.stack.push(self.allocator, types.U256.zero());
-            self.gas_used += 32000;
+            self.gas_used += create_gas;
             return;
         }
 
@@ -1624,7 +1638,7 @@ pub const EVM = struct {
             const creator_balance = db.getBalance(self.context.address) catch types.U256.zero();
             if (creator_balance.lt(value)) {
                 try self.stack.push(self.allocator, types.U256.zero());
-                self.gas_used += 32000;
+                self.gas_used += create_gas;
                 return;
             }
             try db.setBalance(self.context.address, creator_balance.sub(value));
@@ -1647,7 +1661,7 @@ pub const EVM = struct {
 
         const child_result = child.execute(init_code, &[_]u8{}) catch {
             try self.stack.push(self.allocator, types.U256.zero());
-            self.gas_used += 32000;
+            self.gas_used += create_gas;
             return;
         };
         defer if (child_result.return_data.len > 0) self.allocator.free(child_result.return_data);
@@ -1655,14 +1669,14 @@ pub const EVM = struct {
 
         if (!child_result.success) {
             try self.stack.push(self.allocator, types.U256.zero());
-            self.gas_used += 32000;
+            self.gas_used += create_gas;
             return;
         }
 
         try db.setCode(new_address, child_result.return_data);
         try self.setReturnData(child_result.return_data);
         try self.stack.push(self.allocator, addressToU256(new_address));
-        self.gas_used += 32000;
+        self.gas_used += create_gas;
     }
 
     fn opCreate2(self: *EVM) anyerror!void {
@@ -1672,10 +1686,19 @@ pub const EVM = struct {
         const salt = try self.stack.pop();
         const init_code = try self.readMemoryInput(offset.limbs[0], length.limbs[0]);
         defer self.allocator.free(init_code);
+        const words = (length.limbs[0] + 31) / 32;
+        const copy_gas = words * 3;
+        const hash_gas = words * 6; // EIP-1014: GSHA3WORD * ceil(init_code_len / 32)
+        const new_size = if (length.limbs[0] > 0 and offset.limbs[0] < 0xFFFFFFFFFFFFFFFF)
+            @min(offset.limbs[0] + length.limbs[0], 0xFFFFFFFF)
+        else
+            @as(u64, @intCast(self.memory.data.items.len));
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
+        const create2_gas = 32000 + mem_cost + copy_gas + hash_gas;
 
         if (self.state_db == null) {
             try self.stack.push(self.allocator, types.U256.zero());
-            self.gas_used += 32000;
+            self.gas_used += create2_gas;
             return;
         }
 
@@ -1686,7 +1709,7 @@ pub const EVM = struct {
             const creator_balance = db.getBalance(self.context.address) catch types.U256.zero();
             if (creator_balance.lt(value)) {
                 try self.stack.push(self.allocator, types.U256.zero());
-                self.gas_used += 32000;
+                self.gas_used += create2_gas;
                 return;
             }
             try db.setBalance(self.context.address, creator_balance.sub(value));
@@ -1708,7 +1731,7 @@ pub const EVM = struct {
 
         const child_result = child.execute(init_code, &[_]u8{}) catch {
             try self.stack.push(self.allocator, types.U256.zero());
-            self.gas_used += 32000;
+            self.gas_used += create2_gas;
             return;
         };
         defer if (child_result.return_data.len > 0) self.allocator.free(child_result.return_data);
@@ -1716,24 +1739,28 @@ pub const EVM = struct {
 
         if (!child_result.success) {
             try self.stack.push(self.allocator, types.U256.zero());
-            self.gas_used += 32000;
+            self.gas_used += create2_gas;
             return;
         }
 
         try db.setCode(new_address, child_result.return_data);
         try self.setReturnData(child_result.return_data);
         try self.stack.push(self.allocator, addressToU256(new_address));
-        self.gas_used += 32000;
+        self.gas_used += create2_gas;
     }
 
     // SELFDESTRUCT opcode
     fn opSelfDestruct(self: *EVM) !void {
         const beneficiary = try self.stack.pop();
         const beneficiary_address = u256ToAddress(beneficiary);
+        var selfdestruct_gas: u64 = 5000 + try self.accountAccessCost(beneficiary_address);
 
         if (self.state_db) |db| {
             const from = self.context.address;
             const balance = db.getBalance(from) catch types.U256.zero();
+            if (!balance.isZero() and !db.exists(beneficiary_address)) {
+                selfdestruct_gas += 25000;
+            }
 
             if (!balance.isZero() and !from.eql(beneficiary_address)) {
                 if (!db.exists(beneficiary_address)) {
@@ -1746,7 +1773,7 @@ pub const EVM = struct {
             try db.destroyAccount(from);
         }
 
-        self.gas_used += 5000;
+        self.gas_used += selfdestruct_gas;
         self.halted = true;
     }
 
@@ -1755,7 +1782,8 @@ pub const EVM = struct {
         const end = @min(pc.* + n, code.len);
 
         for (pc.*..end) |i| {
-            value.limbs[0] = (value.limbs[0] << 8) | code[i];
+            value = u256Shl(value, 8);
+            value.limbs[0] |= @as(u64, code[i]);
         }
 
         try self.stack.push(self.allocator, value);

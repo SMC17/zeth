@@ -3,6 +3,17 @@ const evm = @import("evm");
 const types = @import("types");
 const state = @import("state");
 
+fn addressFromU256(value: types.U256) types.Address {
+    var address_bytes: [20]u8 = [_]u8{0} ** 20;
+    for (0..20) |i| {
+        const limb_idx = i / 8;
+        const shift: u6 = @intCast((i % 8) * 8);
+        const b = @as(u8, @truncate((value.limbs[limb_idx] >> shift) & 0xff));
+        address_bytes[19 - i] = b;
+    }
+    return types.Address{ .bytes = address_bytes };
+}
+
 // Comprehensive EVM Test Suite
 // Tests all major opcode families with real bytecode
 
@@ -213,7 +224,8 @@ test "EVM: CALL executes target code and exposes return data" {
     var db = state.StateDB.init(allocator);
     defer db.deinit();
 
-    const callee_addr = types.Address.zero;
+    var callee_addr = types.Address.zero;
+    callee_addr.bytes[19] = 0x01;
 
     const callee_code = [_]u8{
         0x60, 0x2a, // PUSH1 0x2a
@@ -236,7 +248,7 @@ test "EVM: CALL executes target code and exposes return data" {
         0x60, 0x00, // inSize
         0x60, 0x00, // inOffset
         0x60, 0x00, // value
-        0x60, 0x00, // address
+        0x60, 0x01, // address
         0x61, 0xff, 0xff, // gas
         0xf1, // CALL
         0x3d, // RETURNDATASIZE
@@ -299,7 +311,8 @@ test "EVM: STATICCALL executes with zero call value" {
     var db = state.StateDB.init(allocator);
     defer db.deinit();
 
-    const callee_addr = types.Address.zero;
+    var callee_addr = types.Address.zero;
+    callee_addr.bytes[19] = 0x01;
 
     const callee_code = [_]u8{
         0x34, // CALLVALUE
@@ -319,7 +332,7 @@ test "EVM: STATICCALL executes with zero call value" {
         0x60, 0x00, // outOffset
         0x60, 0x00, // inSize
         0x60, 0x00, // inOffset
-        0x60, 0x00, // address
+        0x60, 0x01, // address
         0x61, 0xff, 0xff, // gas
         0xfa, // STATICCALL
     };
@@ -339,7 +352,8 @@ test "EVM: DELEGATECALL preserves caller context" {
     var db = state.StateDB.init(allocator);
     defer db.deinit();
 
-    const callee_addr = types.Address.zero;
+    var callee_addr = types.Address.zero;
+    callee_addr.bytes[19] = 0x01;
 
     const callee_code = [_]u8{
         0x33, // CALLER
@@ -363,7 +377,7 @@ test "EVM: DELEGATECALL preserves caller context" {
         0x60, 0x00, // outOffset
         0x60, 0x00, // inSize
         0x60, 0x00, // inOffset
-        0x60, 0x00, // address
+        0x60, 0x01, // address
         0x61, 0xff, 0xff, // gas
         0xf4, // DELEGATECALL
     };
@@ -418,10 +432,7 @@ test "EVM: CREATE deploys runtime code from init code return data" {
     const deployed_u256 = try vm.stack.pop();
     try testing.expect(!deployed_u256.isZero());
 
-    var deployed_addr_bytes: [20]u8 = undefined;
-    const deployed_bytes = deployed_u256.toBytes();
-    @memcpy(&deployed_addr_bytes, deployed_bytes[12..32]);
-    const deployed_addr = types.Address{ .bytes = deployed_addr_bytes };
+    const deployed_addr = addressFromU256(deployed_u256);
 
     const deployed_code = db.getCode(deployed_addr);
     try testing.expectEqual(@as(usize, 1), deployed_code.len);
@@ -732,4 +743,89 @@ test "EVM: Gas metering" {
 
     const result = vm.execute(&bytecode, &[_]u8{});
     try testing.expectError(error.OutOfGas, result);
+}
+
+test "EVM: CALL gas includes value transfer and new-account cost" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var sender = types.Address.zero;
+    sender.bytes[19] = 0xaa;
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.fromU64(1_000_000));
+
+    var context = evm.ExecutionContext.default();
+    context.address = sender;
+    context.caller = sender;
+
+    var vm = try evm.EVM.initWithState(allocator, 5_000_000, context, &db);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x01, // value
+        0x60, 0x02, // address (new account)
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+    };
+
+    const res = try vm.execute(&code, &[_]u8{});
+    defer if (res.return_data.len > 0) allocator.free(res.return_data);
+    defer allocator.free(res.logs);
+    const success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), success.limbs[0]);
+    // 700 + 2600(cold) + 9000(value) + 25000(new account) = 37300 minimum.
+    try testing.expect(vm.gas_used >= 37_300);
+}
+
+test "EVM: CREATE2 charges additional hashcost over CREATE for same init code length" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var creator = types.Address.zero;
+    creator.bytes[19] = 0xcc;
+    try db.createAccount(creator);
+    try db.setBalance(creator, types.U256.fromU64(10_000_000));
+
+    var context = evm.ExecutionContext.default();
+    context.address = creator;
+    context.caller = creator;
+
+    var vm_create = try evm.EVM.initWithState(allocator, 5_000_000, context, &db);
+    defer vm_create.deinit();
+    var vm_create2 = try evm.EVM.initWithState(allocator, 5_000_000, context, &db);
+    defer vm_create2.deinit();
+
+    // length=64 -> ceil(64/32)=2 words, CREATE2 extra = 12 gas.
+    const create_code = [_]u8{
+        0x60, 0x40, // length
+        0x60, 0x00, // offset
+        0x60, 0x00, // value
+        0xf0, // CREATE
+    };
+    const create2_code = [_]u8{
+        0x60, 0x01, // salt
+        0x60, 0x40, // length
+        0x60, 0x00, // offset
+        0x60, 0x00, // value
+        0xf5, // CREATE2
+    };
+
+    const r1 = try vm_create.execute(&create_code, &[_]u8{});
+    defer if (r1.return_data.len > 0) allocator.free(r1.return_data);
+    defer allocator.free(r1.logs);
+    const r2 = try vm_create2.execute(&create2_code, &[_]u8{});
+    defer if (r2.return_data.len > 0) allocator.free(r2.return_data);
+    defer allocator.free(r2.logs);
+
+    try testing.expect(vm_create2.gas_used >= vm_create.gas_used + 12);
 }

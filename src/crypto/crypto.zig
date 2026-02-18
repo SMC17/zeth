@@ -1,4 +1,7 @@
 const std = @import("std");
+const Ecdsa = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256;
+const Curve = std.crypto.ecc.Secp256k1;
+const Scalar = Curve.scalar.Scalar;
 
 /// Keccak-256 hash function as used by Ethereum
 /// Uses Zig stdlib Keccak-256 implementation (padding 0x01).
@@ -19,11 +22,12 @@ pub const Secp256k1 = struct {
         data: [64]u8,
 
         pub fn fromPrivateKey(private_key: [32]u8) !PublicKey {
-            // Placeholder for secp256k1 key derivation
-            var pk: PublicKey = undefined;
-            @memset(&pk.data, 0);
-            _ = private_key;
-            return pk;
+            const secret = try Ecdsa.SecretKey.fromBytes(private_key);
+            const key_pair = try Ecdsa.KeyPair.fromSecretKey(secret);
+            const uncompressed = key_pair.public_key.toUncompressedSec1();
+            var out = PublicKey{ .data = undefined };
+            @memcpy(out.data[0..64], uncompressed[1..65]);
+            return out;
         }
 
         pub fn toAddress(self: PublicKey) [20]u8 {
@@ -42,26 +46,119 @@ pub const Secp256k1 = struct {
         v: u8,
 
         pub fn verify(self: Signature, message: [32]u8, public_key: PublicKey) bool {
-            // Placeholder for signature verification
-            _ = self;
-            _ = message;
-            _ = public_key;
-            return false;
+            var sec1: [65]u8 = undefined;
+            sec1[0] = 0x04;
+            @memcpy(sec1[1..65], public_key.data[0..64]);
+
+            const pk = Ecdsa.PublicKey.fromSec1(&sec1) catch return false;
+            const sig = Ecdsa.Signature{ .r = self.r, .s = self.s };
+            sig.verify(&message, pk) catch return false;
+            return true;
         }
 
         pub fn recover(self: Signature, message: [32]u8) !PublicKey {
-            // Placeholder for public key recovery from signature
-            _ = self;
-            _ = message;
-            return error.NotImplemented;
+            const rec_id: u8 = if (self.v >= 27) self.v - 27 else self.v;
+            const parity = rec_id & 1;
+            const prefer_overflow = (rec_id >> 1) & 1;
+
+            // Try preferred overflow bit first, then the alternate candidate.
+            for ([_]u1{ @intCast(prefer_overflow), @intCast(prefer_overflow ^ 1) }) |overflow_bit| {
+                if (try recoverWithParams(self, message, parity, overflow_bit)) |pk| {
+                    return pk;
+                }
+            }
+            return error.SignatureVerificationFailed;
         }
     };
 
     pub fn sign(message: [32]u8, private_key: [32]u8) !Signature {
-        // Placeholder for signing
-        _ = message;
-        _ = private_key;
-        return error.NotImplemented;
+        const secret = try Ecdsa.SecretKey.fromBytes(private_key);
+        const key_pair = try Ecdsa.KeyPair.fromSecretKey(secret);
+        const sig = try key_pair.sign(&message, null);
+        const uncompressed = key_pair.public_key.toUncompressedSec1();
+
+        // Determine recovery id by matching recovered key against signer pubkey.
+        var expected_pk = PublicKey{ .data = undefined };
+        @memcpy(expected_pk.data[0..64], uncompressed[1..65]);
+
+        var result = Signature{ .r = sig.r, .s = sig.s, .v = 27 };
+        var rec_id: u8 = 0;
+        while (rec_id < 4) : (rec_id += 1) {
+            result.v = 27 + rec_id;
+            const recovered = result.recover(message) catch continue;
+            if (std.mem.eql(u8, &recovered.data, &expected_pk.data)) {
+                return result;
+            }
+        }
+        return error.SignatureVerificationFailed;
+    }
+
+    fn scalarFromMessage(message: [32]u8) Scalar {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(&message, &digest, .{});
+        var wide = [_]u8{0} ** 48;
+        @memcpy(wide[16..48], digest[0..32]);
+        return Scalar.fromBytes48(wide, .big);
+    }
+
+    fn u256ToBytes(value: u256) [32]u8 {
+        var out: [32]u8 = undefined;
+        var n = value;
+        var i: usize = 32;
+        while (i > 0) {
+            i -= 1;
+            out[i] = @as(u8, @truncate(n & 0xff));
+            n >>= 8;
+        }
+        return out;
+    }
+
+    fn bytesToU256(bytes: [32]u8) u256 {
+        var n: u256 = 0;
+        for (bytes) |b| {
+            n = (n << 8) | @as(u256, b);
+        }
+        return n;
+    }
+
+    fn recoverWithParams(
+        self: Signature,
+        message: [32]u8,
+        parity: u8,
+        overflow_bit: u1,
+    ) !?PublicKey {
+        const r = Scalar.fromBytes(self.r, .big) catch return null;
+        const s = Scalar.fromBytes(self.s, .big) catch return null;
+        if (r.isZero() or s.isZero()) return null;
+
+        const n_order: u256 = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
+        const p_field: u256 = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F;
+        const r_int = bytesToU256(self.r);
+        const x_int = if (overflow_bit == 0) blk: {
+            break :blk r_int;
+        } else blk: {
+            const sum = @addWithOverflow(r_int, n_order);
+            if (sum[1] != 0) return null;
+            break :blk sum[0];
+        };
+        if (x_int >= p_field) return null;
+        const x_bytes = u256ToBytes(x_int);
+
+        const x_fe = Curve.Fe.fromBytes(x_bytes, .big) catch return null;
+        const y_fe = Curve.recoverY(x_fe, parity != 0) catch return null;
+        const y_bytes = y_fe.toBytes(.big);
+        const point_r = Curve.fromSerializedAffineCoordinates(x_bytes, y_bytes, .big) catch return null;
+
+        const z = scalarFromMessage(message);
+        const s_r = try point_r.mulPublic(s.toBytes(.little), .little);
+        const z_g = try Curve.basePoint.mulPublic(z.toBytes(.little), .little);
+        const numerator = s_r.sub(z_g);
+        const q = try numerator.mulPublic(r.invert().toBytes(.little), .little);
+
+        const sec1 = q.toUncompressedSec1();
+        var pk = PublicKey{ .data = undefined };
+        @memcpy(pk.data[0..64], sec1[1..65]);
+        return if (self.verify(message, pk)) pk else null;
     }
 };
 
@@ -106,4 +203,28 @@ test "public key to address" {
     const addr = pk.toAddress();
 
     try testing.expectEqual(@as(usize, 20), addr.len);
+}
+
+test "secp256k1 sign/verify/recover roundtrip" {
+    const testing = std.testing;
+
+    const private_key = [_]u8{
+        0x4c, 0x08, 0x83, 0xa6, 0x91, 0x02, 0x93, 0x7d,
+        0x62, 0x33, 0x47, 0x71, 0x2c, 0x8f, 0xa5, 0xf3,
+        0x6c, 0xd7, 0xd8, 0x3f, 0x9f, 0x3a, 0x52, 0x4f,
+        0xc6, 0x6f, 0x66, 0x73, 0xc1, 0x4c, 0xab, 0x5c,
+    };
+    const message = [_]u8{
+        0x3a, 0x12, 0xb5, 0x10, 0x16, 0xfe, 0x4c, 0xbd,
+        0x6b, 0xa7, 0xfe, 0x3e, 0x2a, 0x7f, 0xe1, 0x58,
+        0x3f, 0x06, 0x66, 0xd2, 0xb5, 0x19, 0x6d, 0x90,
+        0x2f, 0xdc, 0x54, 0x73, 0xa7, 0x0b, 0x2c, 0x0d,
+    };
+
+    const pk = try Secp256k1.PublicKey.fromPrivateKey(private_key);
+    const sig = try Secp256k1.sign(message, private_key);
+    try testing.expect(sig.verify(message, pk));
+
+    const recovered = try sig.recover(message);
+    try testing.expectEqualSlices(u8, &pk.data, &recovered.data);
 }
