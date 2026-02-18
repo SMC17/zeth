@@ -829,3 +829,41 @@ test "EVM: CREATE2 charges additional hashcost over CREATE for same init code le
 
     try testing.expect(vm_create2.gas_used >= vm_create.gas_used + 12);
 }
+
+test "EVM: CALL OOG in child obeys EIP-150 reserve and does not exhaust parent" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var target = types.Address.zero;
+    target.bytes[19] = 0x01;
+
+    // Infinite loop: JUMPDEST; PUSH1 0; JUMP
+    const looping = [_]u8{ 0x5b, 0x60, 0x00, 0x56 };
+    try db.setCode(target, &looping);
+
+    var vm = try evm.EVM.initWithState(allocator, 100_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const caller = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x01, // address
+        0x61, 0xff, 0xff, // requested gas (high)
+        0xf1, // CALL
+    };
+
+    const result = try vm.execute(&caller, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const call_success = try vm.stack.pop();
+    try testing.expect(call_success.isZero());
+    // EIP-150 reserve should leave parent with remaining gas.
+    try testing.expect(vm.gas_used < vm.gas_limit);
+}

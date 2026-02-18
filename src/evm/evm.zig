@@ -244,6 +244,32 @@ pub const EVM = struct {
         self.return_data = dup;
     }
 
+    const CallGasPlan = struct {
+        forwarded: u64,
+        child_limit: u64,
+    };
+
+    fn eip150CallGasPlan(
+        available_gas: u64,
+        base_gas: u64,
+        requested_gas: u64,
+        add_stipend: bool,
+        has_value: bool,
+    ) !CallGasPlan {
+        if (available_gas < base_gas) return error.OutOfGas;
+
+        const available_after_base = available_gas - base_gas;
+        const cap = available_after_base - (available_after_base / 64);
+        const forwarded = @min(requested_gas, cap);
+        const stipend: u64 = if (add_stipend and has_value) 2300 else 0;
+        const child_limit = forwarded +| stipend;
+
+        return CallGasPlan{
+            .forwarded = forwarded,
+            .child_limit = child_limit,
+        };
+    }
+
     fn u256ToAddress(value: types.U256) types.Address {
         var address_bytes: [20]u8 = [_]u8{0} ** 20;
         // Address is the low 160 bits of the integer, interpreted as big-endian bytes.
@@ -1432,8 +1458,9 @@ pub const EVM = struct {
         callee_address: types.Address,
         caller: types.Address,
         call_value: types.U256,
-        gas_limit: u64,
+        requested_gas: u64,
         base_gas: u64,
+        add_stipend: bool,
         args_offset: u64,
         args_length: u64,
         ret_offset: u64,
@@ -1448,6 +1475,16 @@ pub const EVM = struct {
 
         var call_success = true;
         var child_logs: []const Log = &[_]Log{};
+        var charged_child_gas: u64 = 0;
+
+        const available_gas = self.gas_limit -| self.gas_used;
+        const gas_plan = try eip150CallGasPlan(
+            available_gas,
+            base_gas,
+            requested_gas,
+            add_stipend,
+            !call_value.isZero(),
+        );
 
         if (self.state_db) |db| {
             const target_code = db.getCode(code_address);
@@ -1460,31 +1497,35 @@ pub const EVM = struct {
                 child_ctx.code = target_code;
                 child_ctx.calldata = calldata;
 
-                const available_gas = self.gas_limit -| self.gas_used;
-                const child_gas = @min(gas_limit, available_gas);
-                var child = try EVM.initWithState(self.allocator, child_gas, child_ctx, db);
+                var child = try EVM.initWithState(self.allocator, gas_plan.child_limit, child_ctx, db);
                 defer child.deinit();
 
-                const child_result = child.execute(target_code, calldata) catch {
-                    call_success = false;
-                    try self.setReturnData(&[_]u8{});
-                    try self.stack.push(self.allocator, types.U256.zero());
-                    self.gas_used += base_gas;
-                    return false;
+                const child_result_opt = blk: {
+                    const res = child.execute(target_code, calldata) catch {
+                        call_success = false;
+                        charged_child_gas = gas_plan.forwarded;
+                        // No return data available when child execution fails hard.
+                        return_data_local = &[_]u8{};
+                        break :blk null;
+                    };
+                    break :blk res;
                 };
 
-                return_data_local = try self.allocator.dupe(u8, child_result.return_data);
-                return_data_local_owned = true;
-                self.allocator.free(child_result.return_data);
-                child_logs = child_result.logs;
-                call_success = child_result.success;
+                if (child_result_opt) |child_result| {
+                    return_data_local = try self.allocator.dupe(u8, child_result.return_data);
+                    return_data_local_owned = true;
+                    self.allocator.free(child_result.return_data);
+                    child_logs = child_result.logs;
+                    call_success = child_result.success;
+                    charged_child_gas = @min(child_result.gas_used, gas_plan.forwarded);
+                }
             }
         }
 
         const mem_cost = try self.writeCallReturn(ret_offset, ret_length, return_data_local);
         try self.setReturnData(return_data_local);
         try self.stack.push(self.allocator, if (call_success) types.U256.one() else types.U256.zero());
-        self.gas_used += base_gas + mem_cost;
+        self.gas_used += base_gas + mem_cost + charged_child_gas;
 
         // Merge child logs only for successful calls.
         if (call_success and child_logs.len > 0) {
@@ -1524,6 +1565,7 @@ pub const EVM = struct {
             value,
             gas.limbs[0],
             base_gas,
+            true,
             args_offset.limbs[0],
             args_length.limbs[0],
             ret_offset.limbs[0],
@@ -1548,6 +1590,7 @@ pub const EVM = struct {
             types.U256.zero(),
             gas.limbs[0],
             base_gas,
+            false,
             args_offset.limbs[0],
             args_length.limbs[0],
             ret_offset.limbs[0],
@@ -1576,6 +1619,7 @@ pub const EVM = struct {
             value,
             gas.limbs[0],
             base_gas,
+            true,
             args_offset.limbs[0],
             args_length.limbs[0],
             ret_offset.limbs[0],
@@ -1600,6 +1644,7 @@ pub const EVM = struct {
             self.context.value,
             gas.limbs[0],
             base_gas,
+            false,
             args_offset.limbs[0],
             args_length.limbs[0],
             ret_offset.limbs[0],
@@ -1622,6 +1667,9 @@ pub const EVM = struct {
             @as(u64, @intCast(self.memory.data.items.len));
         const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         const create_gas = 32000 + mem_cost + copy_gas;
+        const available_gas = self.gas_limit -| self.gas_used;
+        if (available_gas < create_gas) return error.OutOfGas;
+        const child_gas_limit = (available_gas - create_gas) - ((available_gas - create_gas) / 64);
 
         if (self.state_db == null) {
             try self.stack.push(self.allocator, types.U256.zero());
@@ -1656,12 +1704,12 @@ pub const EVM = struct {
         child_ctx.calldata = &[_]u8{};
         child_ctx.code = init_code;
 
-        var child = try EVM.initWithState(self.allocator, self.gas_limit, child_ctx, db);
+        var child = try EVM.initWithState(self.allocator, child_gas_limit, child_ctx, db);
         defer child.deinit();
 
         const child_result = child.execute(init_code, &[_]u8{}) catch {
             try self.stack.push(self.allocator, types.U256.zero());
-            self.gas_used += create_gas;
+            self.gas_used += create_gas + child_gas_limit;
             return;
         };
         defer if (child_result.return_data.len > 0) self.allocator.free(child_result.return_data);
@@ -1669,14 +1717,14 @@ pub const EVM = struct {
 
         if (!child_result.success) {
             try self.stack.push(self.allocator, types.U256.zero());
-            self.gas_used += create_gas;
+            self.gas_used += create_gas + @min(child_result.gas_used, child_gas_limit);
             return;
         }
 
         try db.setCode(new_address, child_result.return_data);
         try self.setReturnData(child_result.return_data);
         try self.stack.push(self.allocator, addressToU256(new_address));
-        self.gas_used += create_gas;
+        self.gas_used += create_gas + @min(child_result.gas_used, child_gas_limit);
     }
 
     fn opCreate2(self: *EVM) anyerror!void {
@@ -1695,6 +1743,9 @@ pub const EVM = struct {
             @as(u64, @intCast(self.memory.data.items.len));
         const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         const create2_gas = 32000 + mem_cost + copy_gas + hash_gas;
+        const available_gas = self.gas_limit -| self.gas_used;
+        if (available_gas < create2_gas) return error.OutOfGas;
+        const child_gas_limit = (available_gas - create2_gas) - ((available_gas - create2_gas) / 64);
 
         if (self.state_db == null) {
             try self.stack.push(self.allocator, types.U256.zero());
@@ -1726,12 +1777,12 @@ pub const EVM = struct {
         child_ctx.calldata = &[_]u8{};
         child_ctx.code = init_code;
 
-        var child = try EVM.initWithState(self.allocator, self.gas_limit, child_ctx, db);
+        var child = try EVM.initWithState(self.allocator, child_gas_limit, child_ctx, db);
         defer child.deinit();
 
         const child_result = child.execute(init_code, &[_]u8{}) catch {
             try self.stack.push(self.allocator, types.U256.zero());
-            self.gas_used += create2_gas;
+            self.gas_used += create2_gas + child_gas_limit;
             return;
         };
         defer if (child_result.return_data.len > 0) self.allocator.free(child_result.return_data);
@@ -1739,14 +1790,14 @@ pub const EVM = struct {
 
         if (!child_result.success) {
             try self.stack.push(self.allocator, types.U256.zero());
-            self.gas_used += create2_gas;
+            self.gas_used += create2_gas + @min(child_result.gas_used, child_gas_limit);
             return;
         }
 
         try db.setCode(new_address, child_result.return_data);
         try self.setReturnData(child_result.return_data);
         try self.stack.push(self.allocator, addressToU256(new_address));
-        self.gas_used += create2_gas;
+        self.gas_used += create2_gas + @min(child_result.gas_used, child_gas_limit);
     }
 
     // SELFDESTRUCT opcode
@@ -2312,4 +2363,33 @@ test "EVM simple addition" {
 
     const result = try evm.stack.pop();
     try testing.expectEqual(@as(u64, 8), result.limbs[0]);
+}
+
+test "EVM EIP-150 call gas plan applies 63/64 cap" {
+    const testing = std.testing;
+
+    const plan = try EVM.eip150CallGasPlan(
+        100_000, // available
+        700, // base
+        100_000, // requested
+        false, // stipend
+        false, // value
+    );
+    // available_after_base = 99,300; cap = 99,300 - floor(99,300/64) = 97,749
+    try testing.expectEqual(@as(u64, 97_749), plan.forwarded);
+    try testing.expectEqual(@as(u64, 97_749), plan.child_limit);
+}
+
+test "EVM EIP-150 call gas plan adds stipend for value transfer" {
+    const testing = std.testing;
+
+    const plan = try EVM.eip150CallGasPlan(
+        50_000, // available
+        12_300, // base (700 + 2600 + 9000)
+        30_000, // requested
+        true, // stipend-eligible opcode
+        true, // non-zero value
+    );
+    try testing.expectEqual(@as(u64, 30_000), plan.forwarded);
+    try testing.expectEqual(@as(u64, 32_300), plan.child_limit);
 }
