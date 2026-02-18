@@ -52,6 +52,70 @@ jobs:
         zig build
         ./zig-out/bin/run_reference_tests || echo "Reference tests skipped (PyEVM may not be available)"
 
+    - name: Generate Opcode/Gas Report (JSON)
+      run: |
+        mkdir -p artifacts
+        ./zig-out/bin/opcode_report --out artifacts/opcode_report.json
+
+    - name: Enforce Opcode Regression Gate
+      run: |
+        jq -e '.summary.failed == 0' artifacts/opcode_report.json
+
+    - name: Enforce Differential Regression Gate
+      run: |
+        jq -e 'if .summary.reference_compared > 0 then (.summary.reference_mismatches == 0) else true end' artifacts/opcode_report.json
+
+    - name: Upload Opcode Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: opcode-report
+        path: artifacts/opcode_report.json
+        if-no-files-found: error
+
+  differential:
+    name: Differential (Geth/PyEVM)
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Zig
+      uses: goto-bus-stop/setup-zig@v2
+      with:
+        version: 0.14.1
+
+    - name: Install PyEVM (best effort)
+      run: pip3 install eth-py-evm || true
+
+    - name: Build Reference Runner
+      run: zig build
+
+    - name: Detect Reference Availability
+      id: refs
+      run: |
+        if python3 -c "import eth; from eth.vm.forks import BerlinVM" >/dev/null 2>&1 || command -v geth >/dev/null 2>&1; then
+          echo "available=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "available=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Run Differential Tests
+      if: steps.refs.outputs.available == 'true'
+      run: ./zig-out/bin/run_reference_tests
+
+    - name: Skip Differential Tests
+      if: steps.refs.outputs.available != 'true'
+      run: echo "No reference implementation available; differential job skipped by gate."
+
+    - name: Upload Discrepancy Report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: differential-discrepancies
+        path: /tmp/zeth_discrepancies.txt
+        if-no-files-found: ignore
+
   lint:
     name: Code Quality
     runs-on: ubuntu-latest

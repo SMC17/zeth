@@ -437,4 +437,27 @@ pub fn build(b: *std.Build) void {
         .root_module = reference_test_exe_mod,
     });
     b.installArtifact(reference_test_exe);
+
+    // Machine-readable opcode/gas report generator
+    const opcode_report_mod = b.createModule(.{
+        .root_source_file = b.path("validation/opcode_report.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    opcode_report_mod.addImport("types", types_mod);
+    opcode_report_mod.addImport("comparison_tool", comparison_test_mod);
+    opcode_report_mod.addImport("reference_interfaces", reference_interfaces_mod);
+
+    const opcode_report_exe = b.addExecutable(.{
+        .name = "opcode_report",
+        .root_module = opcode_report_mod,
+    });
+    b.installArtifact(opcode_report_exe);
+
+    const opcode_report_run = b.addRunArtifact(opcode_report_exe);
+    if (b.args) |args| {
+        opcode_report_run.addArgs(args);
+    }
+    const opcode_report_step = b.step("opcode-report", "Generate machine-readable opcode/gas report");
+    opcode_report_step.dependOn(&opcode_report_run.step);
 }

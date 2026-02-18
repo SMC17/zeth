@@ -123,4 +123,11 @@ pub fn main() !void {
         std.debug.print("\n", .{});
         std.debug.print("No discrepancies found!\n", .{});
     }
+
+    // Strict gate: if reference implementation is available, any mismatch fails.
+    if (pyevm_available or geth_available) {
+        if (tests_passed != tests_run or test_runner.discrepancy_tracker.count() > 0) {
+            return error.ReferenceMismatch;
+        }
+    }
 }
