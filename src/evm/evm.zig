@@ -1717,11 +1717,25 @@ pub const EVM = struct {
     // SELFDESTRUCT opcode
     fn opSelfDestruct(self: *EVM) !void {
         const beneficiary = try self.stack.pop();
-        _ = beneficiary;
+        const beneficiary_address = u256ToAddress(beneficiary);
 
-        // Mark for deletion - in real implementation would transfer balance
+        if (self.state_db) |db| {
+            const from = self.context.address;
+            const balance = db.getBalance(from) catch types.U256.zero();
+
+            if (!balance.isZero() and !from.eql(beneficiary_address)) {
+                if (!db.exists(beneficiary_address)) {
+                    try db.createAccount(beneficiary_address);
+                }
+                const beneficiary_balance = db.getBalance(beneficiary_address) catch types.U256.zero();
+                try db.setBalance(beneficiary_address, beneficiary_balance.add(balance));
+            }
+
+            try db.destroyAccount(from);
+        }
+
         self.gas_used += 5000;
-        return error.SelfDestruct;
+        self.halted = true;
     }
 
     fn opPush(self: *EVM, code: []const u8, pc: *usize, n: usize) !void {

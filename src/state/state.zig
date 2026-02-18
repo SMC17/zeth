@@ -100,6 +100,27 @@ pub const StateDB = struct {
         }
         try self.setAccount(address, account);
     }
+
+    pub fn destroyAccount(self: *StateDB, address: types.Address) !void {
+        if (self.code.fetchRemove(address)) |old| {
+            self.allocator.free(old.value);
+        }
+
+        var storage_keys = std.ArrayList(StorageKey).init(self.allocator);
+        defer storage_keys.deinit();
+
+        var it = self.storage.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.address.eql(address)) {
+                try storage_keys.append(entry.key_ptr.*);
+            }
+        }
+        for (storage_keys.items) |key| {
+            _ = self.storage.remove(key);
+        }
+
+        _ = self.accounts.remove(address);
+    }
 };
 
 const StorageKey = struct {
@@ -285,6 +306,32 @@ test "StateDB code operations" {
 
     const account = try state.getAccount(addr);
     try testing.expect(!account.code_hash.eql(types.Hash.zero));
+}
+
+test "StateDB destroyAccount clears account code and storage" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var state = StateDB.init(allocator);
+    defer state.deinit();
+
+    var addr = types.Address.zero;
+    addr.bytes[19] = 0x44;
+    const key = types.U256.fromU64(7);
+    const value = types.U256.fromU64(99);
+    const code_bytes = [_]u8{ 0x60, 0x00, 0x00 };
+
+    try state.createAccount(addr);
+    try state.setBalance(addr, types.U256.fromU64(1234));
+    try state.setStorage(addr, key, value);
+    try state.setCode(addr, &code_bytes);
+
+    try state.destroyAccount(addr);
+
+    try testing.expect(!state.exists(addr));
+    try testing.expectEqual(@as(usize, 0), state.getCode(addr).len);
+    const stored = try state.getStorage(addr, key);
+    try testing.expect(stored.isZero());
 }
 
 test "Trie insert and get" {

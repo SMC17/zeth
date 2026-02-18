@@ -495,6 +495,47 @@ test "EVM: Nested CALL persists storage in state DB" {
     try testing.expectEqual(@as(u64, 0x2a), stored.limbs[0]);
 }
 
+test "EVM: SELFDESTRUCT transfers balance and deletes account state" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var sender = types.Address.zero;
+    sender.bytes[19] = 0xaa;
+    const beneficiary = types.Address.zero;
+
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.fromU64(777));
+    try db.setStorage(sender, types.U256.fromU64(1), types.U256.fromU64(42));
+    try db.setCode(sender, &[_]u8{ 0x60, 0x01, 0x00 });
+
+    var context = evm.ExecutionContext.default();
+    context.address = sender;
+    context.caller = sender;
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, context, &db);
+    defer vm.deinit();
+
+    const bytecode = [_]u8{
+        0x60, 0x00, // PUSH1 beneficiary address
+        0xff, // SELFDESTRUCT
+    };
+
+    const result = try vm.execute(&bytecode, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+    try testing.expect(result.success);
+
+    try testing.expect(!db.exists(sender));
+    const beneficiary_balance = try db.getBalance(beneficiary);
+    try testing.expectEqual(@as(u64, 777), beneficiary_balance.limbs[0]);
+    const stored = try db.getStorage(sender, types.U256.fromU64(1));
+    try testing.expect(stored.isZero());
+    try testing.expectEqual(@as(usize, 0), db.getCode(sender).len);
+}
+
 test "EVM: Stack operations (DUP and SWAP)" {
     const testing = std.testing;
     const allocator = testing.allocator;
