@@ -333,6 +333,230 @@ pub const EVM = struct {
         output: []u8,
     };
 
+    fn readWordLen(input: []const u8, offset: usize) u64 {
+        const readTailAsU64 = struct {
+            fn run(bytes: []const u8) u64 {
+                var v: u64 = 0;
+                for (bytes) |b| {
+                    v = (v << 8) | b;
+                }
+                return v;
+            }
+        }.run;
+
+        if (offset + 32 <= input.len) {
+            for (input[offset .. offset + 24]) |b| {
+                if (b != 0) return std.math.maxInt(u64);
+            }
+            return readTailAsU64(input[offset + 24 .. offset + 32]);
+        }
+
+        var word = [_]u8{0} ** 32;
+        if (offset < input.len) {
+            const copy_len = @min(32, input.len - offset);
+            @memcpy(word[0..copy_len], input[offset .. offset + copy_len]);
+        }
+        for (word[0..24]) |b| {
+            if (b != 0) return std.math.maxInt(u64);
+        }
+        return readTailAsU64(word[24..32]);
+    }
+
+    fn readInputSegmentPadded(
+        allocator: std.mem.Allocator,
+        input: []const u8,
+        data_offset: u64,
+        segment_offset: u64,
+        segment_len: u64,
+    ) ![]u8 {
+        const len: usize = @intCast(segment_len);
+        const out = try allocator.alloc(u8, len);
+        @memset(out, 0);
+        if (len == 0) return out;
+
+        const start_u64 = data_offset +| segment_offset;
+        if (start_u64 >= input.len) return out;
+        const start: usize = @intCast(start_u64);
+        const available = input.len - start;
+        const copy_len = @min(len, available);
+        if (copy_len > 0) {
+            @memcpy(out[0..copy_len], input[start .. start + copy_len]);
+        }
+        return out;
+    }
+
+    fn bitLenBE(bytes: []const u8) u64 {
+        for (bytes, 0..) |b, i| {
+            if (b != 0) {
+                const bits_in_byte: u64 = 8 - @as(u64, @intCast(@clz(b)));
+                return @as(u64, @intCast((bytes.len - i - 1) * 8)) + bits_in_byte;
+            }
+        }
+        return 0;
+    }
+
+    fn modexpRequiredGas(input: []const u8) !u64 {
+        const base_len = readWordLen(input, 0);
+        const exp_len = readWordLen(input, 32);
+        const mod_len = readWordLen(input, 64);
+
+        const data_offset: u64 = 96;
+        const exp_head_len_u64 = @min(exp_len, 32);
+        const exp_head = try readInputSegmentPadded(std.heap.page_allocator, input, data_offset, base_len, exp_head_len_u64);
+        defer std.heap.page_allocator.free(exp_head);
+
+        const exp_head_bits = bitLenBE(exp_head);
+        const iter_raw: u128 = if (exp_len == 0)
+            0
+        else if (exp_len <= 32)
+            if (exp_head_bits == 0) 0 else exp_head_bits - 1
+        else
+            @as(u128, 8) * (exp_len - 32) + if (exp_head_bits == 0) 0 else exp_head_bits - 1;
+
+        const iteration_count: u128 = @max(iter_raw, 1);
+        const max_len = @max(base_len, mod_len);
+        const words: u128 = (@as(u128, max_len) + 7) / 8;
+        const mult_complexity: u128 = words * words;
+        const computed: u128 = (mult_complexity * iteration_count) / 3;
+        const final_gas: u128 = @max(@as(u128, 200), computed);
+        return if (final_gas > std.math.maxInt(u64)) std.math.maxInt(u64) else @intCast(final_gas);
+    }
+
+    fn hexEncode(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
+        const lut = "0123456789abcdef";
+        const out = try allocator.alloc(u8, bytes.len * 2);
+        for (bytes, 0..) |b, i| {
+            out[i * 2] = lut[(b >> 4) & 0x0f];
+            out[i * 2 + 1] = lut[b & 0x0f];
+        }
+        return out;
+    }
+
+    fn hexNibble(c: u8) !u8 {
+        return switch (c) {
+            '0'...'9' => c - '0',
+            'a'...'f' => c - 'a' + 10,
+            'A'...'F' => c - 'A' + 10,
+            else => error.InvalidHex,
+        };
+    }
+
+    fn managedFromBigEndian(allocator: std.mem.Allocator, bytes: []const u8) !std.math.big.int.Managed {
+        var value = try std.math.big.int.Managed.init(allocator);
+        errdefer value.deinit();
+        if (bytes.len == 0) {
+            try value.set(0);
+            return value;
+        }
+        const hex = try hexEncode(allocator, bytes);
+        defer allocator.free(hex);
+        try value.setString(16, hex);
+        return value;
+    }
+
+    fn managedToFixedLenBigEndian(allocator: std.mem.Allocator, value: std.math.big.int.Managed, out_len: usize) ![]u8 {
+        const out = try allocator.alloc(u8, out_len);
+        @memset(out, 0);
+        if (out_len == 0) return out;
+
+        const hex = try value.toString(allocator, 16, .lower);
+        defer allocator.free(hex);
+        if (hex.len == 0 or (hex.len == 1 and hex[0] == '0')) return out;
+
+        var src_idx: usize = hex.len;
+        var dst_idx: usize = out_len;
+        while (src_idx > 0 and dst_idx > 0) {
+            const lo = try hexNibble(hex[src_idx - 1]);
+            src_idx -= 1;
+            const hi: u8 = if (src_idx > 0) blk: {
+                const h = try hexNibble(hex[src_idx - 1]);
+                src_idx -= 1;
+                break :blk h;
+            } else 0;
+            dst_idx -= 1;
+            out[dst_idx] = (hi << 4) | lo;
+        }
+        return out;
+    }
+
+    fn runModExpPrecompile(self: *EVM, input: []const u8, required_gas: u64) !PrecompileResult {
+        const base_len = readWordLen(input, 0);
+        const exp_len = readWordLen(input, 32);
+        const mod_len = readWordLen(input, 64);
+        const data_offset: u64 = 96;
+
+        const output_len: usize = @intCast(mod_len);
+        if (mod_len == 0) {
+            return PrecompileResult{
+                .success = true,
+                .gas_used = required_gas,
+                .output = try self.allocator.alloc(u8, 0),
+            };
+        }
+
+        const base_bytes = try readInputSegmentPadded(self.allocator, input, data_offset, 0, base_len);
+        defer self.allocator.free(base_bytes);
+        const exp_bytes = try readInputSegmentPadded(self.allocator, input, data_offset, base_len, exp_len);
+        defer self.allocator.free(exp_bytes);
+        const mod_bytes = try readInputSegmentPadded(self.allocator, input, data_offset, base_len +| exp_len, mod_len);
+        defer self.allocator.free(mod_bytes);
+
+        var base = try managedFromBigEndian(self.allocator, base_bytes);
+        defer base.deinit();
+        var exponent = try managedFromBigEndian(self.allocator, exp_bytes);
+        defer exponent.deinit();
+        var modulus = try managedFromBigEndian(self.allocator, mod_bytes);
+        defer modulus.deinit();
+
+        if (modulus.eqlZero()) {
+            const out = try self.allocator.alloc(u8, output_len);
+            @memset(out, 0);
+            return PrecompileResult{
+                .success = true,
+                .gas_used = required_gas,
+                .output = out,
+            };
+        }
+
+        var quotient = try std.math.big.int.Managed.init(self.allocator);
+        defer quotient.deinit();
+        var rem = try std.math.big.int.Managed.init(self.allocator);
+        defer rem.deinit();
+
+        try std.math.big.int.Managed.divTrunc(&quotient, &rem, &base, &modulus);
+        var base_mod = rem;
+        var result = try std.math.big.int.Managed.initSet(self.allocator, 1);
+        defer result.deinit();
+
+        while (!exponent.eqlZero()) {
+            if (exponent.isOdd()) {
+                var prod = try std.math.big.int.Managed.init(self.allocator);
+                defer prod.deinit();
+                try std.math.big.int.Managed.mul(&prod, &result, &base_mod);
+                try std.math.big.int.Managed.divTrunc(&quotient, &rem, &prod, &modulus);
+                try result.copy(rem.toConst());
+            }
+
+            var squared = try std.math.big.int.Managed.init(self.allocator);
+            defer squared.deinit();
+            try std.math.big.int.Managed.mul(&squared, &base_mod, &base_mod);
+            try std.math.big.int.Managed.divTrunc(&quotient, &rem, &squared, &modulus);
+            try base_mod.copy(rem.toConst());
+
+            var shifted = try std.math.big.int.Managed.init(self.allocator);
+            defer shifted.deinit();
+            try std.math.big.int.Managed.shiftRight(&shifted, &exponent, 1);
+            try exponent.copy(shifted.toConst());
+        }
+
+        const out = try managedToFixedLenBigEndian(self.allocator, result, output_len);
+        return PrecompileResult{
+            .success = true,
+            .gas_used = required_gas,
+            .output = out,
+        };
+    }
+
     fn runPrecompile(self: *EVM, id: u8, input: []const u8, forwarded_gas: u64) !PrecompileResult {
         const words = (input.len + 31) / 32;
         const required_gas: u64 = switch (id) {
@@ -340,6 +564,7 @@ pub const EVM = struct {
             2 => 60 + 12 * words, // SHA256
             3 => 600 + 120 * words, // RIPEMD160
             4 => 15 + 3 * words, // IDENTITY
+            5 => try modexpRequiredGas(input), // MODEXP (EIP-2565)
             else => forwarded_gas,
         };
 
@@ -393,6 +618,7 @@ pub const EVM = struct {
                 if (input.len > 0) @memcpy(out, input);
                 return PrecompileResult{ .success = true, .gas_used = required_gas, .output = out };
             },
+            5 => return try self.runModExpPrecompile(input, required_gas),
             else => {
                 return PrecompileResult{
                     .success = false,
