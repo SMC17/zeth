@@ -12,7 +12,7 @@ pub fn main() !void {
 
     std.debug.print("Zeth - Ethereum Implementation in Zig\n", .{});
     std.debug.print("======================================\n\n", .{});
-    
+
     // Example: Create and hash a simple transaction
     const tx = types.Transaction{
         .nonce = 0,
@@ -31,12 +31,12 @@ pub fn main() !void {
     std.debug.print("  Gas Price: {}\n", .{tx.gas_price});
     std.debug.print("  Gas Limit: {}\n", .{tx.gas_limit});
     std.debug.print("  Value: {} wei\n", .{tx.value});
-    
+
     // Example: Hash computation
     const data = "Hello, Ethereum!";
     var hash: [32]u8 = undefined;
     crypto.keccak256(data, &hash);
-    
+
     std.debug.print("\nKeccak256 hash of \"{s}\":\n", .{data});
     std.debug.print("  0x", .{});
     for (hash) |byte| {
@@ -49,14 +49,13 @@ pub fn main() !void {
 
 test "basic functionality" {
     const testing = std.testing;
-    
+
     // Test that we can import all modules
     _ = types;
     _ = crypto;
     _ = rlp;
     _ = evm;
     _ = state;
-    
+
     try testing.expect(true);
 }
-

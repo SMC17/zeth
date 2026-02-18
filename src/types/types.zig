@@ -108,16 +108,16 @@ pub const U256 = struct {
 
         return result;
     }
-    
+
     pub fn sub(self: U256, other: U256) U256 {
         var result = U256.zero();
         var borrow: i128 = 0;
-        
+
         inline for (0..4) |i| {
             const a = @as(i128, self.limbs[i]);
             const b = @as(i128, other.limbs[i]);
             const diff = a - b - borrow;
-            
+
             if (diff < 0) {
                 result.limbs[i] = @intCast(@as(u128, @bitCast(diff + (1 << 64))) & 0xFFFFFFFFFFFFFFFF);
                 borrow = 1;
@@ -126,53 +126,55 @@ pub const U256 = struct {
                 borrow = 0;
             }
         }
-        
+
         return result;
     }
-    
+
     pub fn mul(self: U256, other: U256) U256 {
         var result = U256.zero();
-        
+
         for (0..4) |i| {
             var carry: u64 = 0;
             for (0..4) |j| {
                 if (i + j >= 4) break;
-                const product = @as(u128, self.limbs[i]) * @as(u128, other.limbs[j]) + 
-                               @as(u128, result.limbs[i + j]) + carry;
+                const product = @as(u128, self.limbs[i]) * @as(u128, other.limbs[j]) +
+                    @as(u128, result.limbs[i + j]) + carry;
                 result.limbs[i + j] = @truncate(product);
                 carry = @intCast(product >> 64);
             }
         }
-        
+
         return result;
     }
-    
+
     pub fn div(self: U256, other: U256) U256 {
         if (other.isZero()) return U256.zero();
-        
+
         // Simplified division for small values
         if (other.limbs[1] == 0 and other.limbs[2] == 0 and other.limbs[3] == 0 and
-            self.limbs[1] == 0 and self.limbs[2] == 0 and self.limbs[3] == 0) {
+            self.limbs[1] == 0 and self.limbs[2] == 0 and self.limbs[3] == 0)
+        {
             return U256.fromU64(self.limbs[0] / other.limbs[0]);
         }
-        
+
         // For larger values, use long division (simplified)
         // TODO: Implement proper Knuth division algorithm
         return U256.zero();
     }
-    
+
     pub fn mod(self: U256, other: U256) U256 {
         if (other.isZero()) return U256.zero();
-        
+
         // Simplified modulo for small values
         if (other.limbs[1] == 0 and other.limbs[2] == 0 and other.limbs[3] == 0 and
-            self.limbs[1] == 0 and self.limbs[2] == 0 and self.limbs[3] == 0) {
+            self.limbs[1] == 0 and self.limbs[2] == 0 and self.limbs[3] == 0)
+        {
             return U256.fromU64(self.limbs[0] % other.limbs[0]);
         }
-        
+
         return U256.zero();
     }
-    
+
     pub fn lt(self: U256, other: U256) bool {
         var i: usize = 4;
         while (i > 0) {
@@ -182,7 +184,7 @@ pub const U256 = struct {
         }
         return false;
     }
-    
+
     pub fn gt(self: U256, other: U256) bool {
         var i: usize = 4;
         while (i > 0) {
@@ -192,27 +194,27 @@ pub const U256 = struct {
         }
         return false;
     }
-    
+
     pub fn eq(self: U256, other: U256) bool {
         return self.limbs[0] == other.limbs[0] and
-               self.limbs[1] == other.limbs[1] and
-               self.limbs[2] == other.limbs[2] and
-               self.limbs[3] == other.limbs[3];
+            self.limbs[1] == other.limbs[1] and
+            self.limbs[2] == other.limbs[2] and
+            self.limbs[3] == other.limbs[3];
     }
 
     pub fn isZero(self: U256) bool {
-        return self.limbs[0] == 0 and self.limbs[1] == 0 and 
-               self.limbs[2] == 0 and self.limbs[3] == 0;
+        return self.limbs[0] == 0 and self.limbs[1] == 0 and
+            self.limbs[2] == 0 and self.limbs[3] == 0;
     }
-    
+
     // Signed arithmetic helpers (two's complement)
-    
+
     /// Check if a U256 represents a negative number in two's complement
     /// Returns true if the MSB (bit 255) is set
     pub fn isSignedNegative(self: U256) bool {
         return (self.limbs[3] >> 63) != 0;
     }
-    
+
     /// Get absolute value of signed number (two's complement)
     pub fn signedAbs(self: U256) U256 {
         if (self.isSignedNegative()) {
@@ -222,7 +224,7 @@ pub const U256 = struct {
             result.limbs[1] = ~self.limbs[1];
             result.limbs[2] = ~self.limbs[2];
             result.limbs[3] = ~self.limbs[3];
-            
+
             // Add 1
             var carry: u64 = 1;
             var i: usize = 0;
@@ -237,7 +239,7 @@ pub const U256 = struct {
         }
         return self;
     }
-    
+
     /// Negate a signed number (two's complement)
     pub fn signedNegateFast(self: U256) U256 {
         if (self.isZero()) return self;
@@ -247,7 +249,7 @@ pub const U256 = struct {
         result.limbs[1] = ~self.limbs[1];
         result.limbs[2] = ~self.limbs[2];
         result.limbs[3] = ~self.limbs[3];
-        
+
         // Add 1
         var carry: u64 = 1;
         var i: usize = 0;
@@ -260,7 +262,7 @@ pub const U256 = struct {
         }
         return result;
     }
-    
+
     pub fn format(
         self: U256,
         comptime fmt: []const u8,
@@ -269,7 +271,7 @@ pub const U256 = struct {
     ) !void {
         _ = fmt;
         _ = options;
-        
+
         if (self.isZero()) {
             try writer.writeAll("0");
             return;
@@ -373,18 +375,18 @@ pub const Account = struct {
 
 test "Address creation and formatting" {
     const testing = std.testing;
-    
+
     const addr = Address.zero;
     try testing.expect(addr.eql(Address.zero));
 }
 
 test "U256 arithmetic" {
     const testing = std.testing;
-    
+
     const a = U256.fromU64(100);
     const b = U256.fromU64(200);
     const c = a.add(b);
-    
+
     try testing.expectEqual(@as(u64, 300), c.limbs[0]);
     try testing.expect(!c.isZero());
     try testing.expect(U256.zero().isZero());
@@ -392,10 +394,9 @@ test "U256 arithmetic" {
 
 test "Hash creation" {
     const testing = std.testing;
-    
+
     const h1 = Hash.zero;
     const h2 = Hash.zero;
-    
+
     try testing.expect(h1.eql(h2));
 }
-

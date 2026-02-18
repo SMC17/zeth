@@ -34,7 +34,7 @@ pub const Secp256k1 = struct {
         pub fn toAddress(self: PublicKey) [20]u8 {
             var hash: [32]u8 = undefined;
             keccak256(&self.data, &hash);
-            
+
             var address: [20]u8 = undefined;
             @memcpy(&address, hash[12..32]);
             return address;
@@ -72,17 +72,17 @@ pub const Secp256k1 = struct {
 
 test "keccak256 deterministic" {
     const testing = std.testing;
-    
+
     // Test that hashing is deterministic
     const data = "Hello, Ethereum!";
     var hash1: [32]u8 = undefined;
     var hash2: [32]u8 = undefined;
-    
+
     keccak256(data, &hash1);
     keccak256(data, &hash2);
-    
+
     try testing.expectEqualSlices(u8, &hash1, &hash2);
-    
+
     // Test empty string
     keccak256("", &hash1);
     try testing.expect(hash1.len == 32);
@@ -90,10 +90,9 @@ test "keccak256 deterministic" {
 
 test "public key to address" {
     const testing = std.testing;
-    
+
     var pk = Secp256k1.PublicKey{ .data = [_]u8{0} ** 64 };
     const addr = pk.toAddress();
-    
+
     try testing.expectEqual(@as(usize, 20), addr.len);
 }
-

@@ -79,17 +79,17 @@ pub fn build(b: *std.Build) void {
     counter_mod.addImport("types", types_mod);
     counter_mod.addImport("crypto", crypto_mod);
     counter_mod.addImport("evm", evm_mod);
-    
+
     const counter_exe = b.addExecutable(.{
         .name = "counter",
         .root_module = counter_mod,
     });
     b.installArtifact(counter_exe);
-    
+
     const counter_run = b.addRunArtifact(counter_exe);
     const counter_step = b.step("run-counter", "Run the counter example");
     counter_step.dependOn(&counter_run.step);
-    
+
     // Storage example
     const storage_mod = b.createModule(.{
         .root_source_file = b.path("examples/storage.zig"),
@@ -99,17 +99,17 @@ pub fn build(b: *std.Build) void {
     storage_mod.addImport("types", types_mod);
     storage_mod.addImport("crypto", crypto_mod);
     storage_mod.addImport("evm", evm_mod);
-    
+
     const storage_exe = b.addExecutable(.{
         .name = "storage",
         .root_module = storage_mod,
     });
     b.installArtifact(storage_exe);
-    
+
     const storage_run = b.addRunArtifact(storage_exe);
     const storage_step = b.step("run-storage", "Run the storage example");
     storage_step.dependOn(&storage_run.step);
-    
+
     // Arithmetic example
     const arithmetic_mod = b.createModule(.{
         .root_source_file = b.path("examples/arithmetic.zig"),
@@ -119,17 +119,17 @@ pub fn build(b: *std.Build) void {
     arithmetic_mod.addImport("types", types_mod);
     arithmetic_mod.addImport("crypto", crypto_mod);
     arithmetic_mod.addImport("evm", evm_mod);
-    
+
     const arithmetic_exe = b.addExecutable(.{
         .name = "arithmetic",
         .root_module = arithmetic_mod,
     });
     b.installArtifact(arithmetic_exe);
-    
+
     const arithmetic_run = b.addRunArtifact(arithmetic_exe);
     const arithmetic_step = b.step("run-arithmetic", "Run the arithmetic example");
     arithmetic_step.dependOn(&arithmetic_run.step);
-    
+
     // Events example
     const events_mod = b.createModule(.{
         .root_source_file = b.path("examples/events.zig"),
@@ -139,17 +139,17 @@ pub fn build(b: *std.Build) void {
     events_mod.addImport("types", types_mod);
     events_mod.addImport("crypto", crypto_mod);
     events_mod.addImport("evm", evm_mod);
-    
+
     const events_exe = b.addExecutable(.{
         .name = "events",
         .root_module = events_mod,
     });
     b.installArtifact(events_exe);
-    
+
     const events_run = b.addRunArtifact(events_exe);
     const events_step = b.step("run-events", "Run the events example");
     events_step.dependOn(&events_run.step);
-    
+
     // Benchmarks
     const bench_mod = b.createModule(.{
         .root_source_file = b.path("src/benchmarks.zig"),
@@ -159,17 +159,17 @@ pub fn build(b: *std.Build) void {
     bench_mod.addImport("types", types_mod);
     bench_mod.addImport("crypto", crypto_mod);
     bench_mod.addImport("evm", evm_mod);
-    
+
     const bench_exe = b.addExecutable(.{
         .name = "benchmarks",
         .root_module = bench_mod,
     });
     b.installArtifact(bench_exe);
-    
+
     const bench_run = b.addRunArtifact(bench_exe);
     const bench_step = b.step("bench", "Run performance benchmarks");
     bench_step.dependOn(&bench_run.step);
-    
+
     // Validation against Ethereum tests
     const rlp_validator_mod = b.createModule(.{
         .root_source_file = b.path("validation/rlp_validator.zig"),
@@ -177,17 +177,17 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     rlp_validator_mod.addImport("rlp", rlp_mod);
-    
+
     const rlp_validator_exe = b.addExecutable(.{
         .name = "rlp_validator",
         .root_module = rlp_validator_mod,
     });
     b.installArtifact(rlp_validator_exe);
-    
+
     const rlp_validator_run = b.addRunArtifact(rlp_validator_exe);
     const validate_rlp_step = b.step("validate-rlp", "Validate RLP encoding against Ethereum");
     validate_rlp_step.dependOn(&rlp_validator_run.step);
-    
+
     // RLP Decoding Validator
     const rlp_decode_validator_mod = b.createModule(.{
         .root_source_file = b.path("validation/rlp_decode_validator.zig"),
@@ -195,17 +195,17 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     rlp_decode_validator_mod.addImport("rlp", rlp_mod);
-    
+
     const rlp_decode_validator_exe = b.addExecutable(.{
         .name = "rlp_decode_validator",
         .root_module = rlp_decode_validator_mod,
     });
     b.installArtifact(rlp_decode_validator_exe);
-    
+
     const rlp_decode_validator_run = b.addRunArtifact(rlp_decode_validator_exe);
     const validate_rlp_decode_step = b.step("validate-rlp-decode", "Validate RLP decoding against Ethereum");
     validate_rlp_decode_step.dependOn(&rlp_decode_validator_run.step);
-    
+
     // Invalid RLP Validator
     const rlp_invalid_validator_mod = b.createModule(.{
         .root_source_file = b.path("validation/rlp_invalid_validator.zig"),
@@ -213,13 +213,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     rlp_invalid_validator_mod.addImport("rlp", rlp_mod);
-    
+
     const rlp_invalid_validator_exe = b.addExecutable(.{
         .name = "rlp_invalid_validator",
         .root_module = rlp_invalid_validator_mod,
     });
     b.installArtifact(rlp_invalid_validator_exe);
-    
+
     const rlp_invalid_validator_run = b.addRunArtifact(rlp_invalid_validator_exe);
     const validate_rlp_invalid_step = b.step("validate-rlp-invalid", "Test invalid RLP rejection");
     validate_rlp_invalid_step.dependOn(&rlp_invalid_validator_run.step);
@@ -279,7 +279,7 @@ pub fn build(b: *std.Build) void {
     });
     const run_state_tests = b.addRunArtifact(state_tests);
     test_step.dependOn(&run_state_tests.step);
-    
+
     // Comprehensive EVM tests
     const comprehensive_test_mod = b.createModule(.{
         .root_source_file = b.path("src/evm/comprehensive_test.zig"),
@@ -289,13 +289,13 @@ pub fn build(b: *std.Build) void {
     comprehensive_test_mod.addImport("evm", evm_mod);
     comprehensive_test_mod.addImport("types", types_mod);
     comprehensive_test_mod.addImport("crypto", crypto_mod);
-    
+
     const comprehensive_tests = b.addTest(.{
         .root_module = comprehensive_test_mod,
     });
     const run_comprehensive_tests = b.addRunArtifact(comprehensive_tests);
     test_step.dependOn(&run_comprehensive_tests.step);
-    
+
     // Edge case tests for U256
     const types_edge_test_mod = b.createModule(.{
         .root_source_file = b.path("src/types/edge_case_tests.zig"),
@@ -303,13 +303,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     types_edge_test_mod.addImport("types", types_mod);
-    
+
     const types_edge_tests = b.addTest(.{
         .root_module = types_edge_test_mod,
     });
     const run_types_edge_tests = b.addRunArtifact(types_edge_tests);
     test_step.dependOn(&run_types_edge_tests.step);
-    
+
     // Edge case tests for EVM
     const evm_edge_test_mod = b.createModule(.{
         .root_source_file = b.path("src/evm/edge_case_tests.zig"),
@@ -319,13 +319,13 @@ pub fn build(b: *std.Build) void {
     evm_edge_test_mod.addImport("evm", evm_mod);
     evm_edge_test_mod.addImport("types", types_mod);
     evm_edge_test_mod.addImport("crypto", crypto_mod);
-    
+
     const evm_edge_tests = b.addTest(.{
         .root_module = evm_edge_test_mod,
     });
     const run_evm_edge_tests = b.addRunArtifact(evm_edge_tests);
     test_step.dependOn(&run_evm_edge_tests.step);
-    
+
     // Manual opcode verification tests
     const manual_opcode_test_mod = b.createModule(.{
         .root_source_file = b.path("validation/manual_opcode_tests.zig"),
@@ -334,13 +334,13 @@ pub fn build(b: *std.Build) void {
     });
     manual_opcode_test_mod.addImport("evm", evm_mod);
     manual_opcode_test_mod.addImport("types", types_mod);
-    
+
     const manual_opcode_tests = b.addTest(.{
         .root_module = manual_opcode_test_mod,
     });
     const run_manual_opcode_tests = b.addRunArtifact(manual_opcode_tests);
     test_step.dependOn(&run_manual_opcode_tests.step);
-    
+
     // Comparison tool tests
     const comparison_test_mod = b.createModule(.{
         .root_source_file = b.path("validation/comparison_tool.zig"),
@@ -349,13 +349,13 @@ pub fn build(b: *std.Build) void {
     });
     comparison_test_mod.addImport("evm", evm_mod);
     comparison_test_mod.addImport("types", types_mod);
-    
+
     const comparison_tests = b.addTest(.{
         .root_module = comparison_test_mod,
     });
     const run_comparison_tests = b.addRunArtifact(comparison_tests);
     test_step.dependOn(&run_comparison_tests.step);
-    
+
     // Opcode verification tests
     const opcode_verification_mod = b.createModule(.{
         .root_source_file = b.path("validation/opcode_verification.zig"),
@@ -365,13 +365,13 @@ pub fn build(b: *std.Build) void {
     opcode_verification_mod.addImport("evm", evm_mod);
     opcode_verification_mod.addImport("types", types_mod);
     opcode_verification_mod.addImport("comparison_tool", comparison_test_mod);
-    
+
     const opcode_verification_tests = b.addTest(.{
         .root_module = opcode_verification_mod,
     });
     const run_opcode_verification_tests = b.addRunArtifact(opcode_verification_tests);
     test_step.dependOn(&run_opcode_verification_tests.step);
-    
+
     // Reference interfaces tests
     const reference_interfaces_mod = b.createModule(.{
         .root_source_file = b.path("validation/reference_interfaces.zig"),
@@ -379,13 +379,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     reference_interfaces_mod.addImport("types", types_mod);
-    
+
     const reference_interfaces_tests = b.addTest(.{
         .root_module = reference_interfaces_mod,
     });
     const run_reference_interfaces_tests = b.addRunArtifact(reference_interfaces_tests);
     test_step.dependOn(&run_reference_interfaces_tests.step);
-    
+
     // Discrepancy tracker tests
     const discrepancy_tracker_mod = b.createModule(.{
         .root_source_file = b.path("validation/discrepancy_tracker.zig"),
@@ -393,13 +393,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     discrepancy_tracker_mod.addImport("types", types_mod);
-    
+
     const discrepancy_tracker_tests = b.addTest(.{
         .root_module = discrepancy_tracker_mod,
     });
     const run_discrepancy_tracker_tests = b.addRunArtifact(discrepancy_tracker_tests);
     test_step.dependOn(&run_discrepancy_tracker_tests.step);
-    
+
     // Reference test runner
     const reference_test_runner_mod = b.createModule(.{
         .root_source_file = b.path("validation/reference_test_runner.zig"),
@@ -411,13 +411,13 @@ pub fn build(b: *std.Build) void {
     reference_test_runner_mod.addImport("comparison_tool", comparison_test_mod);
     reference_test_runner_mod.addImport("reference_interfaces", reference_interfaces_mod);
     reference_test_runner_mod.addImport("discrepancy_tracker", discrepancy_tracker_mod);
-    
+
     const reference_test_runner_tests = b.addTest(.{
         .root_module = reference_test_runner_mod,
     });
     const run_reference_test_runner_tests = b.addRunArtifact(reference_test_runner_tests);
     test_step.dependOn(&run_reference_test_runner_tests.step);
-    
+
     // Reference test runner executable
     const reference_test_exe_mod = b.createModule(.{
         .root_source_file = b.path("validation/run_reference_tests.zig"),
@@ -430,7 +430,7 @@ pub fn build(b: *std.Build) void {
     reference_test_exe_mod.addImport("reference_interfaces", reference_interfaces_mod);
     reference_test_exe_mod.addImport("discrepancy_tracker", discrepancy_tracker_mod);
     reference_test_exe_mod.addImport("reference_test_runner", reference_test_runner_mod);
-    
+
     const reference_test_exe = b.addExecutable(.{
         .name = "run_reference_tests",
         .root_module = reference_test_exe_mod,
