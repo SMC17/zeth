@@ -339,6 +339,7 @@ pub const EVM = struct {
             1 => 3000, // ECRECOVER
             2 => 60 + 12 * words, // SHA256
             3 => 600 + 120 * words, // RIPEMD160
+            4 => 15 + 3 * words, // IDENTITY
             else => forwarded_gas,
         };
 
@@ -385,6 +386,11 @@ pub const EVM = struct {
                 var h: [20]u8 = undefined;
                 crypto.ripemd160(input, &h);
                 @memcpy(out[12..32], h[0..20]);
+                return PrecompileResult{ .success = true, .gas_used = required_gas, .output = out };
+            },
+            4 => {
+                const out = try self.allocator.alloc(u8, input.len);
+                if (input.len > 0) @memcpy(out, input);
                 return PrecompileResult{ .success = true, .gas_used = required_gas, .output = out };
             },
             else => {

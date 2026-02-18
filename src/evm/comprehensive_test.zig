@@ -335,6 +335,40 @@ test "EVM: EXTCODEHASH zero for non-existent account and keccak(empty) for empty
     try testing.expectEqualSlices(u8, &keccak_empty, &empty_hash_u256.toBytes());
 }
 
+test "EVM: BALANCE cold then warm access charges exact gas" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var addr = types.Address.zero;
+    addr.bytes[19] = 0x2a;
+    try db.createAccount(addr);
+    try db.setBalance(addr, types.U256.fromU64(99));
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x2a, // addr
+        0x31, // BALANCE (cold)
+        0x60, 0x2a, // addr
+        0x31, // BALANCE (warm)
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const warm = try vm.stack.pop();
+    const cold = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 99), cold.limbs[0]);
+    try testing.expectEqual(@as(u64, 99), warm.limbs[0]);
+    // PUSH + BALANCE(cold) + PUSH + BALANCE(warm) = 3 + 2600 + 3 + 100
+    try testing.expectEqual(@as(u64, 2_706), vm.gas_used);
+}
+
 test "EVM: BLOCKHASH returns zero outside 256-block window" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -472,6 +506,52 @@ test "EVM: CALL dispatches ECRECOVER precompile (0x01)" {
     try testing.expectEqual(@as(u64, 1), success.limbs[0]);
     try testing.expectEqual(@as(u64, 32), return_size.limbs[0]);
     try testing.expectEqualSlices(u8, &expected_addr, vm.memory.data.items[12..32]);
+}
+
+test "EVM: CALL dispatches IDENTITY precompile (0x04) with exact gas" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1_000_000);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x63, 0x01, 0x02, 0x03, 0x04, // PUSH4 data
+        0x60, 0x00, // offset
+        0x52, // MSTORE
+        0x60, 0x20, // outSize
+        0x60, 0x40, // outOffset
+        0x60, 0x20, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x04, // address (identity precompile)
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+        0x60, 0x00, // return data offset
+        0x60, 0x40, // memory offset
+        0x60, 0x20, // length
+        0x3e, // RETURNDATACOPY
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), success.limbs[0]);
+    try testing.expectEqual(@as(u8, 0x01), vm.memory.data.items[68]);
+    try testing.expectEqual(@as(u8, 0x02), vm.memory.data.items[69]);
+    try testing.expectEqual(@as(u8, 0x03), vm.memory.data.items[70]);
+    try testing.expectEqual(@as(u8, 0x04), vm.memory.data.items[71]);
+
+    // Total gas under current memory accounting model:
+    // PUSH4+PUSH1+MSTORE = 9
+    // CALL arg PUSHes = 21
+    // CALL base (warm precompile) = 800
+    // CALL return memory expansion 32->96 = 6
+    // IDENTITY precompile = 18
+    // RETURNDATACOPY pushes + op = 13
+    try testing.expectEqual(@as(u64, 863), vm.gas_used);
 }
 
 test "EVM: STATICCALL executes with zero call value" {
