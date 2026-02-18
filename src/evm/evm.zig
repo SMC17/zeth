@@ -241,6 +241,53 @@ pub const EVM = struct {
         return types.Address{ .bytes = address_bytes };
     }
 
+    fn addressToU256(address: types.Address) types.U256 {
+        var value = types.U256.zero();
+        var result_bytes = value.toBytes();
+        @memcpy(result_bytes[12..32], address.bytes[0..20]);
+        value = types.U256.fromBytes(result_bytes);
+        return value;
+    }
+
+    fn storageWarmKey(address: types.Address, key: types.U256) types.U256 {
+        var buf: [52]u8 = undefined;
+        @memcpy(buf[0..20], address.bytes[0..20]);
+        const key_bytes = key.toBytes();
+        @memcpy(buf[20..52], key_bytes[0..32]);
+        var hash: [32]u8 = undefined;
+        crypto.keccak256(&buf, &hash);
+        return types.U256.fromBytes(hash);
+    }
+
+    fn deriveCreateAddress(sender: types.Address, nonce: u64) types.Address {
+        var preimage: [28]u8 = undefined;
+        @memcpy(preimage[0..20], sender.bytes[0..20]);
+        std.mem.writeInt(u64, preimage[20..28], nonce, .big);
+        var hash: [32]u8 = undefined;
+        crypto.keccak256(&preimage, &hash);
+        var address_bytes: [20]u8 = undefined;
+        @memcpy(&address_bytes, hash[12..32]);
+        return types.Address{ .bytes = address_bytes };
+    }
+
+    fn deriveCreate2Address(sender: types.Address, salt: types.U256, init_code: []const u8) types.Address {
+        var init_hash: [32]u8 = undefined;
+        crypto.keccak256(init_code, &init_hash);
+
+        var preimage: [85]u8 = undefined;
+        preimage[0] = 0xff;
+        @memcpy(preimage[1..21], sender.bytes[0..20]);
+        const salt_bytes = salt.toBytes();
+        @memcpy(preimage[21..53], salt_bytes[0..32]);
+        @memcpy(preimage[53..85], init_hash[0..32]);
+
+        var hash: [32]u8 = undefined;
+        crypto.keccak256(&preimage, &hash);
+        var address_bytes: [20]u8 = undefined;
+        @memcpy(&address_bytes, hash[12..32]);
+        return types.Address{ .bytes = address_bytes };
+    }
+
     pub fn execute(self: *EVM, code: []const u8, data: []const u8) !ExecutionResult {
         self.context.code = code;
         self.context.calldata = data;
@@ -1543,37 +1590,127 @@ pub const EVM = struct {
     }
 
     // CREATE opcodes
-    fn opCreate(self: *EVM) !void {
+    fn opCreate(self: *EVM) anyerror!void {
         const value = try self.stack.pop();
         const offset = try self.stack.pop();
         const length = try self.stack.pop();
+        const init_code = try self.readMemoryInput(offset.limbs[0], length.limbs[0]);
+        defer self.allocator.free(init_code);
 
-        // Simplified CREATE - return mock address
-        _ = value;
-        _ = offset;
-        _ = length;
+        if (self.state_db == null) {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += 32000;
+            return;
+        }
 
-        // Return a mock contract address
-        const mock_address = types.U256.fromU64(0x1234567890);
-        try self.stack.push(self.allocator, mock_address);
+        const db = self.state_db.?;
+        const creator_nonce = db.getNonce(self.context.address) catch 0;
+        const new_address = deriveCreateAddress(self.context.address, creator_nonce);
+
+        // Value transfer from creator to new account.
+        if (!value.isZero()) {
+            const creator_balance = db.getBalance(self.context.address) catch types.U256.zero();
+            if (creator_balance.lt(value)) {
+                try self.stack.push(self.allocator, types.U256.zero());
+                self.gas_used += 32000;
+                return;
+            }
+            try db.setBalance(self.context.address, creator_balance.sub(value));
+        }
+
+        try db.createAccount(new_address);
+        const callee_balance = db.getBalance(new_address) catch types.U256.zero();
+        try db.setBalance(new_address, callee_balance.add(value));
+        try db.incrementNonce(self.context.address);
+
+        var child_ctx = self.context;
+        child_ctx.address = new_address;
+        child_ctx.caller = self.context.address;
+        child_ctx.value = value;
+        child_ctx.calldata = &[_]u8{};
+        child_ctx.code = init_code;
+
+        var child = try EVM.initWithState(self.allocator, self.gas_limit, child_ctx, db);
+        defer child.deinit();
+
+        const child_result = child.execute(init_code, &[_]u8{}) catch {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += 32000;
+            return;
+        };
+        defer if (child_result.return_data.len > 0) self.allocator.free(child_result.return_data);
+        defer self.allocator.free(child_result.logs);
+
+        if (!child_result.success) {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += 32000;
+            return;
+        }
+
+        try db.setCode(new_address, child_result.return_data);
+        try self.setReturnData(child_result.return_data);
+        try self.stack.push(self.allocator, addressToU256(new_address));
         self.gas_used += 32000;
     }
 
-    fn opCreate2(self: *EVM) !void {
+    fn opCreate2(self: *EVM) anyerror!void {
         const value = try self.stack.pop();
         const offset = try self.stack.pop();
         const length = try self.stack.pop();
         const salt = try self.stack.pop();
+        const init_code = try self.readMemoryInput(offset.limbs[0], length.limbs[0]);
+        defer self.allocator.free(init_code);
 
-        // Simplified CREATE2
-        _ = value;
-        _ = offset;
-        _ = length;
-        _ = salt;
+        if (self.state_db == null) {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += 32000;
+            return;
+        }
 
-        // Return a mock contract address
-        const mock_address = types.U256.fromU64(0x9876543210);
-        try self.stack.push(self.allocator, mock_address);
+        const db = self.state_db.?;
+        const new_address = deriveCreate2Address(self.context.address, salt, init_code);
+
+        if (!value.isZero()) {
+            const creator_balance = db.getBalance(self.context.address) catch types.U256.zero();
+            if (creator_balance.lt(value)) {
+                try self.stack.push(self.allocator, types.U256.zero());
+                self.gas_used += 32000;
+                return;
+            }
+            try db.setBalance(self.context.address, creator_balance.sub(value));
+        }
+
+        try db.createAccount(new_address);
+        const callee_balance = db.getBalance(new_address) catch types.U256.zero();
+        try db.setBalance(new_address, callee_balance.add(value));
+
+        var child_ctx = self.context;
+        child_ctx.address = new_address;
+        child_ctx.caller = self.context.address;
+        child_ctx.value = value;
+        child_ctx.calldata = &[_]u8{};
+        child_ctx.code = init_code;
+
+        var child = try EVM.initWithState(self.allocator, self.gas_limit, child_ctx, db);
+        defer child.deinit();
+
+        const child_result = child.execute(init_code, &[_]u8{}) catch {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += 32000;
+            return;
+        };
+        defer if (child_result.return_data.len > 0) self.allocator.free(child_result.return_data);
+        defer self.allocator.free(child_result.logs);
+
+        if (!child_result.success) {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += 32000;
+            return;
+        }
+
+        try db.setCode(new_address, child_result.return_data);
+        try self.setReturnData(child_result.return_data);
+        try self.stack.push(self.allocator, addressToU256(new_address));
         self.gas_used += 32000;
     }
 
@@ -1665,33 +1802,42 @@ pub const EVM = struct {
 
     fn opSload(self: *EVM) !void {
         const key = try self.stack.pop();
-        const value = try self.storage.load(key);
+        const value = if (self.state_db) |db|
+            db.getStorage(self.context.address, key) catch types.U256.zero()
+        else
+            try self.storage.load(key);
         try self.stack.push(self.allocator, value);
 
+        const warm_key = storageWarmKey(self.context.address, key);
+
         // EIP-2929: 100 gas for warm access, 2100 for cold
-        if (self.warm_storage.contains(key)) {
+        if (self.warm_storage.contains(warm_key)) {
             self.gas_used += 100; // Warm access
         } else {
             self.gas_used += 2100; // Cold access
-            try self.warm_storage.put(key, {}); // Mark as warm
+            try self.warm_storage.put(warm_key, {}); // Mark as warm
         }
     }
 
     fn opSstore(self: *EVM) !void {
         const key = try self.stack.pop();
         const new_value = try self.stack.pop();
-        const current_value = self.storage.load(key) catch types.U256.zero();
+        const current_value = if (self.state_db) |db|
+            db.getStorage(self.context.address, key) catch types.U256.zero()
+        else
+            self.storage.load(key) catch types.U256.zero();
 
         // EIP-2929: Cold access charge (applied before SSTORE operation cost)
         // EIP-2200: Complex SSTORE gas rules
         // SSTORE costs = cold access charge (if cold) + SSTORE operation cost
 
-        const is_warm = self.warm_storage.contains(key);
+        const warm_key = storageWarmKey(self.context.address, key);
+        const is_warm = self.warm_storage.contains(warm_key);
 
         // EIP-2929: Charge cold access cost if this is the first access in transaction
         if (!is_warm) {
             self.gas_used += 2100; // Cold access charge
-            try self.warm_storage.put(key, {}); // Mark as warm for subsequent accesses
+            try self.warm_storage.put(warm_key, {}); // Mark as warm for subsequent accesses
         }
 
         // EIP-2200: SSTORE operation costs based on value transitions
@@ -1722,7 +1868,11 @@ pub const EVM = struct {
             }
         }
 
-        try self.storage.store(key, new_value);
+        if (self.state_db) |db| {
+            try db.setStorage(self.context.address, key, new_value);
+        } else {
+            try self.storage.store(key, new_value);
+        }
     }
 
     fn opJump(self: *EVM, pc: *usize) !void {

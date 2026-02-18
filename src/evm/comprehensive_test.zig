@@ -24,7 +24,9 @@ test "EVM: All arithmetic operations" {
         0x03, // SUB  (12)
     };
 
-    _ = try vm.execute(&bytecode, &[_]u8{});
+    const create_result = try vm.execute(&bytecode, &[_]u8{});
+    defer if (create_result.return_data.len > 0) allocator.free(create_result.return_data);
+    defer allocator.free(create_result.logs);
     const result = try vm.stack.pop();
     try testing.expectEqual(@as(u64, 12), result.limbs[0]);
 }
@@ -43,7 +45,9 @@ test "EVM: Comparison and conditional logic" {
         0x10, // LT
     };
 
-    _ = try vm.execute(&bytecode, &[_]u8{});
+    const create_result = try vm.execute(&bytecode, &[_]u8{});
+    defer if (create_result.return_data.len > 0) allocator.free(create_result.return_data);
+    defer allocator.free(create_result.logs);
     const result = try vm.stack.pop();
     try testing.expectEqual(@as(u64, 1), result.limbs[0]);
 }
@@ -64,7 +68,9 @@ test "EVM: Bitwise operations" {
         0x17, // OR  (result: 0xFF)
     };
 
-    _ = try vm.execute(&bytecode, &[_]u8{});
+    const create_result = try vm.execute(&bytecode, &[_]u8{});
+    defer if (create_result.return_data.len > 0) allocator.free(create_result.return_data);
+    defer allocator.free(create_result.logs);
     const result = try vm.stack.pop();
     try testing.expectEqual(@as(u64, 0xFF), result.limbs[0]);
 }
@@ -82,7 +88,9 @@ test "EVM: EXP computes modular exponentiation" {
         0x0a, // EXP
     };
 
-    _ = try vm.execute(&bytecode, &[_]u8{});
+    const create_result = try vm.execute(&bytecode, &[_]u8{});
+    defer if (create_result.return_data.len > 0) allocator.free(create_result.return_data);
+    defer allocator.free(create_result.logs);
     const result = try vm.stack.pop();
     try testing.expectEqual(@as(u64, 256), result.limbs[0]);
 }
@@ -341,6 +349,150 @@ test "EVM: DELEGATECALL preserves caller context" {
     defer allocator.free(delegate_result.logs);
     const success = try vm.stack.pop();
     try testing.expectEqual(@as(u64, 1), success.limbs[0]);
+}
+
+test "EVM: CREATE deploys runtime code from init code return data" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var creator = types.Address.zero;
+    creator.bytes[19] = 0xaa;
+    try db.createAccount(creator);
+    try db.setBalance(creator, types.U256.fromU64(1_000_000));
+
+    var context = evm.ExecutionContext.default();
+    context.address = creator;
+    context.caller = creator;
+
+    var vm = try evm.EVM.initWithState(allocator, 2_000_000, context, &db);
+    defer vm.deinit();
+
+    // Init code: MSTORE8(0x00, 0x2a); RETURN(offset=0, length=1)
+    const bytecode = [_]u8{
+        0x60, 0x60, 0x60, 0x00, 0x53, // byte 0
+        0x60, 0x2a, 0x60, 0x01, 0x53, // byte 1
+        0x60, 0x60, 0x60, 0x02, 0x53, // byte 2
+        0x60, 0x00, 0x60, 0x03, 0x53, // byte 3
+        0x60, 0x53, 0x60, 0x04, 0x53, // byte 4
+        0x60, 0x60, 0x60, 0x05, 0x53, // byte 5
+        0x60, 0x01, 0x60, 0x06, 0x53, // byte 6
+        0x60, 0x60, 0x60, 0x07, 0x53, // byte 7
+        0x60, 0x00, 0x60, 0x08, 0x53, // byte 8
+        0x60, 0xf3, 0x60, 0x09, 0x53, // byte 9
+        0x60, 0x0a, // PUSH1 length
+        0x60, 0x00, // PUSH1 offset
+        0x60, 0x00, // PUSH1 value
+        0xf0, // CREATE
+    };
+
+    const create_result = try vm.execute(&bytecode, &[_]u8{});
+    defer if (create_result.return_data.len > 0) allocator.free(create_result.return_data);
+    defer allocator.free(create_result.logs);
+    const deployed_u256 = try vm.stack.pop();
+    try testing.expect(!deployed_u256.isZero());
+
+    var deployed_addr_bytes: [20]u8 = undefined;
+    const deployed_bytes = deployed_u256.toBytes();
+    @memcpy(&deployed_addr_bytes, deployed_bytes[12..32]);
+    const deployed_addr = types.Address{ .bytes = deployed_addr_bytes };
+
+    const deployed_code = db.getCode(deployed_addr);
+    try testing.expectEqual(@as(usize, 1), deployed_code.len);
+    try testing.expectEqual(@as(u8, 0x2a), deployed_code[0]);
+}
+
+test "EVM: CREATE2 is deterministic for same salt and init code" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var creator = types.Address.zero;
+    creator.bytes[19] = 0xcc;
+    try db.createAccount(creator);
+    try db.setBalance(creator, types.U256.fromU64(1_000_000));
+
+    var context = evm.ExecutionContext.default();
+    context.address = creator;
+    context.caller = creator;
+
+    var vm1 = try evm.EVM.initWithState(allocator, 2_000_000, context, &db);
+    defer vm1.deinit();
+    var vm2 = try evm.EVM.initWithState(allocator, 2_000_000, context, &db);
+    defer vm2.deinit();
+
+    const code = [_]u8{
+        0x60, 0x60, 0x60, 0x00, 0x53, // byte 0
+        0x60, 0x2a, 0x60, 0x01, 0x53, // byte 1
+        0x60, 0x60, 0x60, 0x02, 0x53, // byte 2
+        0x60, 0x00, 0x60, 0x03, 0x53, // byte 3
+        0x60, 0x53, 0x60, 0x04, 0x53, // byte 4
+        0x60, 0x60, 0x60, 0x05, 0x53, // byte 5
+        0x60, 0x01, 0x60, 0x06, 0x53, // byte 6
+        0x60, 0x60, 0x60, 0x07, 0x53, // byte 7
+        0x60, 0x00, 0x60, 0x08, 0x53, // byte 8
+        0x60, 0xf3, 0x60, 0x09, 0x53, // byte 9
+        0x60, 0x01, // PUSH1 salt
+        0x60, 0x0a, // length
+        0x60, 0x00, // offset
+        0x60, 0x00, // value
+        0xf5, // CREATE2
+    };
+
+    const create2_result_1 = try vm1.execute(&code, &[_]u8{});
+    defer if (create2_result_1.return_data.len > 0) allocator.free(create2_result_1.return_data);
+    defer allocator.free(create2_result_1.logs);
+    const create2_result_2 = try vm2.execute(&code, &[_]u8{});
+    defer if (create2_result_2.return_data.len > 0) allocator.free(create2_result_2.return_data);
+    defer allocator.free(create2_result_2.logs);
+    const a1 = try vm1.stack.pop();
+    const a2 = try vm2.stack.pop();
+    try testing.expect(a1.eq(a2));
+}
+
+test "EVM: Nested CALL persists storage in state DB" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    const callee_addr = types.Address.zero;
+    const callee_code = [_]u8{
+        0x60, 0x2a, // value
+        0x60, 0x01, // key
+        0x55, // SSTORE
+        0x00, // STOP
+    };
+    try db.setCode(callee_addr, &callee_code);
+
+    var caller_ctx = evm.ExecutionContext.default();
+    caller_ctx.address.bytes[19] = 0xdd;
+    try db.createAccount(caller_ctx.address);
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, caller_ctx, &db);
+    defer vm.deinit();
+
+    const call_code = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x00, // address
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+    };
+    _ = try vm.execute(&call_code, &[_]u8{});
+    const success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), success.limbs[0]);
+
+    const stored = try db.getStorage(callee_addr, types.U256.fromU64(1));
+    try testing.expectEqual(@as(u64, 0x2a), stored.limbs[0]);
 }
 
 test "EVM: Stack operations (DUP and SWAP)" {
