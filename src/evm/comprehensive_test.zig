@@ -182,6 +182,30 @@ test "EVM: BLOCKHASH does not underflow for low block numbers" {
     try testing.expect(result.isZero());
 }
 
+test "EVM: BLOCKHASH returns configured hash within 256-block window" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var context = evm.ExecutionContext.default();
+    context.block_number = 300;
+    var vm = try evm.EVM.initWithContext(allocator, 1_000_000, context);
+    defer vm.deinit();
+
+    var hbytes = [_]u8{0} ** 32;
+    hbytes[31] = 0x42;
+    const hash = types.Hash{ .bytes = hbytes };
+    try vm.setBlockHash(299, hash);
+
+    const bytecode = [_]u8{
+        0x61, 0x01, 0x2b, // PUSH2 299
+        0x40, // BLOCKHASH
+    };
+
+    _ = try vm.execute(&bytecode, &[_]u8{});
+    const result = try vm.stack.pop();
+    try testing.expect(result.eq(types.U256.fromBytes(hbytes)));
+}
+
 test "EVM: CALL executes target code and exposes return data" {
     const testing = std.testing;
     const allocator = testing.allocator;

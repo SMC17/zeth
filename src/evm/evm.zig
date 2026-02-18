@@ -52,6 +52,8 @@ pub const EVM = struct {
     warm_storage: std.AutoHashMap(types.U256, void),
     // Track warm account accesses for EIP-2929
     warm_accounts: std.AutoHashMap(types.Address, void),
+    // Optional block hash history for BLOCKHASH opcode.
+    block_hashes: std.AutoHashMap(u64, types.Hash),
     // Return data from last CALL/CREATE/DELEGATECALL (for RETURNDATACOPY)
     return_data: []const u8 = &[_]u8{},
     return_data_owned: ?[]u8 = null,
@@ -71,6 +73,7 @@ pub const EVM = struct {
             .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
             .warm_storage = std.AutoHashMap(types.U256, void).init(allocator),
             .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
+            .block_hashes = std.AutoHashMap(u64, types.Hash).init(allocator),
             .state_db = null,
         };
     }
@@ -87,6 +90,7 @@ pub const EVM = struct {
             .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
             .warm_storage = std.AutoHashMap(types.U256, void).init(allocator),
             .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
+            .block_hashes = std.AutoHashMap(u64, types.Hash).init(allocator),
             .state_db = null,
         };
     }
@@ -103,6 +107,7 @@ pub const EVM = struct {
             .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
             .warm_storage = std.AutoHashMap(types.U256, void).init(allocator),
             .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
+            .block_hashes = std.AutoHashMap(u64, types.Hash).init(allocator),
             .state_db = state_db,
         };
     }
@@ -115,6 +120,11 @@ pub const EVM = struct {
         self.logs.deinit();
         self.warm_storage.deinit();
         self.warm_accounts.deinit();
+        self.block_hashes.deinit();
+    }
+
+    pub fn setBlockHash(self: *EVM, block_number: u64, hash: types.Hash) !void {
+        try self.block_hashes.put(block_number, hash);
     }
 
     /// Calculate gas cost for memory expansion
@@ -1298,9 +1308,11 @@ pub const EVM = struct {
             return;
         }
 
-        // TODO: Look up actual block hash from block history
-        // For now, return zero (will be implemented when we have block storage)
-        try self.stack.push(self.allocator, types.U256.zero());
+        if (self.block_hashes.get(block_number)) |hash| {
+            try self.stack.push(self.allocator, types.U256.fromBytes(hash.bytes));
+        } else {
+            try self.stack.push(self.allocator, types.U256.zero());
+        }
         self.gas_used += 20;
     }
 
