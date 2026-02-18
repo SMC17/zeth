@@ -1276,3 +1276,137 @@ test "EVM: CREATE memory expansion persists across repeated creates" {
     // Second: 9 push + (32000 + 0 mem + 3 copy) = 32012
     try testing.expectEqual(@as(u64, 64_027), vm.gas_used);
 }
+
+test "EVM: nested CALL revert restores child storage" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var callee = types.Address.zero;
+    callee.bytes[19] = 0x0b;
+
+    const callee_code = [_]u8{
+        0x60, 0x2a, // value
+        0x60, 0x01, // key
+        0x55, // SSTORE
+        0x60, 0x00, // revert offset
+        0x60, 0x00, // revert length
+        0xfd, // REVERT
+    };
+    try db.setCode(callee, &callee_code);
+
+    var vm = try evm.EVM.initWithState(allocator, 200_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const caller = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x0b, // address
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+    };
+
+    const result = try vm.execute(&caller, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const call_success = try vm.stack.pop();
+    try testing.expect(call_success.isZero());
+    const stored = try db.getStorage(callee, types.U256.fromU64(1));
+    try testing.expect(stored.isZero());
+}
+
+test "EVM: CREATE revert restores creator nonce and balance" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var creator = types.Address.zero;
+    creator.bytes[19] = 0xcc;
+    try db.createAccount(creator);
+    try db.setBalance(creator, types.U256.fromU64(100));
+
+    var context = evm.ExecutionContext.default();
+    context.address = creator;
+    context.caller = creator;
+
+    var vm = try evm.EVM.initWithState(allocator, 200_000, context, &db);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0xfd, // REVERT opcode byte
+        0x60, 0x00, // mem offset
+        0x53, // MSTORE8
+        0x60, 0x01, // length
+        0x60, 0x00, // offset
+        0x60, 0x01, // value
+        0xf0, // CREATE
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const create_out = try vm.stack.pop();
+    try testing.expect(create_out.isZero());
+    const creator_balance = try db.getBalance(creator);
+    try testing.expectEqual(@as(u64, 100), creator_balance.limbs[0]);
+    try testing.expectEqual(@as(u64, 0), try db.getNonce(creator));
+}
+
+test "EVM: top-level REVERT rolls back nested SELFDESTRUCT effects" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var callee = types.Address.zero;
+    callee.bytes[19] = 0x0a;
+    var beneficiary = types.Address.zero;
+    beneficiary.bytes[19] = 0x01;
+
+    // Child selfdestructs to beneficiary.
+    const callee_code = [_]u8{
+        0x60, 0x01, // beneficiary
+        0xff, // SELFDESTRUCT
+    };
+    try db.setCode(callee, &callee_code);
+    try db.setBalance(callee, types.U256.fromU64(10));
+    try db.createAccount(callee);
+
+    var vm = try evm.EVM.initWithState(allocator, 300_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const caller = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x0a, // address
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+        0x60, 0x00, // revert offset
+        0x60, 0x00, // revert size
+        0xfd, // REVERT top-level tx
+    };
+
+    const result = try vm.execute(&caller, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    try testing.expect(!result.success);
+    try testing.expect(db.exists(callee));
+    const callee_balance = try db.getBalance(callee);
+    try testing.expectEqual(@as(u64, 10), callee_balance.limbs[0]);
+    const beneficiary_balance = try db.getBalance(beneficiary);
+    try testing.expect(beneficiary_balance.isZero());
+}

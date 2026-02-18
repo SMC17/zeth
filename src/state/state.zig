@@ -8,6 +8,7 @@ pub const StateDB = struct {
     accounts: std.AutoHashMap(types.Address, types.Account),
     storage: std.AutoHashMap(StorageKey, types.U256),
     code: std.AutoHashMap(types.Address, []u8),
+    snapshots: std.ArrayList(Snapshot),
 
     pub fn init(allocator: std.mem.Allocator) StateDB {
         return StateDB{
@@ -15,10 +16,15 @@ pub const StateDB = struct {
             .accounts = std.AutoHashMap(types.Address, types.Account).init(allocator),
             .storage = std.AutoHashMap(StorageKey, types.U256).init(allocator),
             .code = std.AutoHashMap(types.Address, []u8).init(allocator),
+            .snapshots = std.ArrayList(Snapshot).init(allocator),
         };
     }
 
     pub fn deinit(self: *StateDB) void {
+        for (self.snapshots.items) |*snap| {
+            snap.deinit(self.allocator);
+        }
+        self.snapshots.deinit();
         var code_iter = self.code.iterator();
         while (code_iter.next()) |entry| {
             self.allocator.free(entry.value_ptr.*);
@@ -121,7 +127,95 @@ pub const StateDB = struct {
 
         _ = self.accounts.remove(address);
     }
+
+    pub fn snapshot(self: *StateDB) !usize {
+        var snap = Snapshot{
+            .accounts = try self.cloneAccounts(),
+            .storage = try self.cloneStorage(),
+            .code = undefined,
+        };
+        errdefer {
+            snap.accounts.deinit();
+            snap.storage.deinit();
+        }
+        snap.code = try self.cloneCode();
+        try self.snapshots.append(snap);
+        return self.snapshots.items.len - 1;
+    }
+
+    pub fn commitSnapshot(self: *StateDB, snapshot_id: usize) !void {
+        if (snapshot_id + 1 != self.snapshots.items.len) return error.InvalidSnapshot;
+        var snap = self.snapshots.pop().?;
+        snap.deinit(self.allocator);
+    }
+
+    pub fn revertToSnapshot(self: *StateDB, snapshot_id: usize) !void {
+        if (snapshot_id + 1 != self.snapshots.items.len) return error.InvalidSnapshot;
+        const snap = self.snapshots.pop().?;
+
+        var current_code = self.code;
+        deinitCodeMap(&current_code, self.allocator);
+        self.accounts.deinit();
+        self.storage.deinit();
+
+        self.accounts = snap.accounts;
+        self.storage = snap.storage;
+        self.code = snap.code;
+    }
+
+    fn cloneAccounts(self: *StateDB) !std.AutoHashMap(types.Address, types.Account) {
+        var copy = std.AutoHashMap(types.Address, types.Account).init(self.allocator);
+        errdefer copy.deinit();
+        var it = self.accounts.iterator();
+        while (it.next()) |entry| {
+            try copy.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        return copy;
+    }
+
+    fn cloneStorage(self: *StateDB) !std.AutoHashMap(StorageKey, types.U256) {
+        var copy = std.AutoHashMap(StorageKey, types.U256).init(self.allocator);
+        errdefer copy.deinit();
+        var it = self.storage.iterator();
+        while (it.next()) |entry| {
+            try copy.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        return copy;
+    }
+
+    fn cloneCode(self: *StateDB) !std.AutoHashMap(types.Address, []u8) {
+        var copy = std.AutoHashMap(types.Address, []u8).init(self.allocator);
+        errdefer deinitCodeMap(&copy, self.allocator);
+
+        var it = self.code.iterator();
+        while (it.next()) |entry| {
+            const dup = try self.allocator.dupe(u8, entry.value_ptr.*);
+            errdefer self.allocator.free(dup);
+            try copy.put(entry.key_ptr.*, dup);
+        }
+        return copy;
+    }
 };
+
+const Snapshot = struct {
+    accounts: std.AutoHashMap(types.Address, types.Account),
+    storage: std.AutoHashMap(StorageKey, types.U256),
+    code: std.AutoHashMap(types.Address, []u8),
+
+    fn deinit(self: *Snapshot, allocator: std.mem.Allocator) void {
+        deinitCodeMap(&self.code, allocator);
+        self.accounts.deinit();
+        self.storage.deinit();
+    }
+};
+
+fn deinitCodeMap(map: *std.AutoHashMap(types.Address, []u8), allocator: std.mem.Allocator) void {
+    var code_iter = map.iterator();
+    while (code_iter.next()) |entry| {
+        allocator.free(entry.value_ptr.*);
+    }
+    map.deinit();
+}
 
 const StorageKey = struct {
     address: types.Address,
@@ -332,6 +426,56 @@ test "StateDB destroyAccount clears account code and storage" {
     try testing.expectEqual(@as(usize, 0), state.getCode(addr).len);
     const stored = try state.getStorage(addr, key);
     try testing.expect(stored.isZero());
+}
+
+test "StateDB snapshot revert restores all state domains" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var state = StateDB.init(allocator);
+    defer state.deinit();
+
+    var addr = types.Address.zero;
+    addr.bytes[19] = 0x45;
+    const key = types.U256.fromU64(3);
+
+    try state.createAccount(addr);
+    try state.setBalance(addr, types.U256.fromU64(10));
+    try state.setStorage(addr, key, types.U256.fromU64(11));
+    try state.setCode(addr, &[_]u8{ 0x60, 0x00, 0x00 });
+
+    const sid = try state.snapshot();
+    try state.setBalance(addr, types.U256.fromU64(99));
+    try state.setStorage(addr, key, types.U256.fromU64(77));
+    try state.destroyAccount(addr);
+    try state.revertToSnapshot(sid);
+
+    try testing.expect(state.exists(addr));
+    const balance = try state.getBalance(addr);
+    try testing.expectEqual(@as(u64, 10), balance.limbs[0]);
+    const stored = try state.getStorage(addr, key);
+    try testing.expectEqual(@as(u64, 11), stored.limbs[0]);
+    try testing.expectEqual(@as(usize, 3), state.getCode(addr).len);
+}
+
+test "StateDB snapshot commit keeps changes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var state = StateDB.init(allocator);
+    defer state.deinit();
+
+    var addr = types.Address.zero;
+    addr.bytes[19] = 0x46;
+    try state.createAccount(addr);
+    try state.setBalance(addr, types.U256.fromU64(1));
+
+    const sid = try state.snapshot();
+    try state.setBalance(addr, types.U256.fromU64(2));
+    try state.commitSnapshot(sid);
+
+    const balance = try state.getBalance(addr);
+    try testing.expectEqual(@as(u64, 2), balance.limbs[0]);
 }
 
 test "Trie insert and get" {

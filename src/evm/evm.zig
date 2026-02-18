@@ -431,6 +431,20 @@ pub const EVM = struct {
         self.context.calldata = data;
         self.halted = false;
         self.clearReturnData();
+        var tx_snapshot: ?usize = null;
+        var tx_committed = false;
+        if (self.state_db) |db| {
+            tx_snapshot = try db.snapshot();
+        }
+        defer {
+            if (self.state_db) |db| {
+                if (tx_snapshot) |sid| {
+                    if (!tx_committed) {
+                        db.revertToSnapshot(sid) catch {};
+                    }
+                }
+            }
+        }
         var pc: usize = 0;
 
         while (pc < code.len) {
@@ -456,6 +470,12 @@ pub const EVM = struct {
             };
         }
 
+        if (self.state_db) |db| {
+            if (tx_snapshot) |sid| {
+                try db.commitSnapshot(sid);
+                tx_committed = true;
+            }
+        }
         return ExecutionResult{
             .success = true,
             .gas_used = self.gas_used,
@@ -1593,6 +1613,10 @@ pub const EVM = struct {
         } else if (self.state_db) |db| {
             const target_code = db.getCode(code_address);
             if (target_code.len > 0) {
+                const call_snapshot = try db.snapshot();
+                var call_committed = false;
+                defer if (!call_committed) db.revertToSnapshot(call_snapshot) catch {};
+
                 var child_ctx = self.context;
                 child_ctx.caller = caller;
                 child_ctx.origin = self.context.origin;
@@ -1623,6 +1647,8 @@ pub const EVM = struct {
                     call_success = child_result.success;
                     charged_child_gas = @min(child_result.gas_used, gas_plan.forwarded);
                     if (child_result.success) {
+                        try db.commitSnapshot(call_snapshot);
+                        call_committed = true;
                         self.gas_refund += child_result.gas_refund;
                     }
                 }
@@ -1788,6 +1814,10 @@ pub const EVM = struct {
         }
 
         const db = self.state_db.?;
+        const create_snapshot = try db.snapshot();
+        var create_committed = false;
+        defer if (!create_committed) db.revertToSnapshot(create_snapshot) catch {};
+
         const creator_nonce = db.getNonce(self.context.address) catch 0;
         const new_address = deriveCreateAddress(self.context.address, creator_nonce);
 
@@ -1836,6 +1866,8 @@ pub const EVM = struct {
         try self.stack.push(self.allocator, addressToU256(new_address));
         self.gas_refund += child_result.gas_refund;
         self.gas_used += create_gas + @min(child_result.gas_used, child_gas_limit);
+        try db.commitSnapshot(create_snapshot);
+        create_committed = true;
     }
 
     fn opCreate2(self: *EVM) anyerror!void {
@@ -1868,6 +1900,10 @@ pub const EVM = struct {
         }
 
         const db = self.state_db.?;
+        const create2_snapshot = try db.snapshot();
+        var create2_committed = false;
+        defer if (!create2_committed) db.revertToSnapshot(create2_snapshot) catch {};
+
         const new_address = deriveCreate2Address(self.context.address, salt, init_code);
 
         if (!value.isZero()) {
@@ -1913,6 +1949,8 @@ pub const EVM = struct {
         try self.stack.push(self.allocator, addressToU256(new_address));
         self.gas_refund += child_result.gas_refund;
         self.gas_used += create2_gas + @min(child_result.gas_used, child_gas_limit);
+        try db.commitSnapshot(create2_snapshot);
+        create2_committed = true;
     }
 
     // SELFDESTRUCT opcode
