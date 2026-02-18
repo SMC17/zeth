@@ -1532,6 +1532,7 @@ pub const EVM = struct {
             @min(ret_offset + ret_length, 0xFFFFFFFF)
         else
             ret_offset;
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         if (new_size > self.memory.data.items.len) {
             try self.memory.data.resize(new_size);
         }
@@ -1540,7 +1541,7 @@ pub const EVM = struct {
         if (copy_len > 0) {
             @memcpy(self.memory.data.items[ret_offset..][0..copy_len], data[0..copy_len]);
         }
-        return self.memoryExpansionCost(new_size);
+        return mem_cost;
     }
 
     fn executeCallFrame(

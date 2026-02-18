@@ -1162,3 +1162,42 @@ test "EVM: CALL to precompile address uses warm access cost" {
     // Plus 7 PUSH1 operations.
     try testing.expectEqual(@as(u64, 881), vm.gas_used);
 }
+
+test "EVM: CALL charges return-memory expansion gas exactly" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var target = types.Address.zero;
+    target.bytes[19] = 0x0a;
+
+    // Child: PUSH1 0; PUSH1 0; RETURN (returns empty, still successful).
+    const callee = [_]u8{ 0x60, 0x00, 0x60, 0x00, 0xf3 };
+    try db.setCode(target, &callee);
+
+    var vm = try evm.EVM.initWithState(allocator, 200_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const caller = [_]u8{
+        0x60, 0x20, // outSize
+        0x60, 0x40, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x0a, // address
+        0x60, 0xff, // gas
+        0xf1, // CALL
+    };
+
+    const result = try vm.execute(&caller, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    // Parent push gas: 21
+    // CALL base: 700 + 2600 (cold account) = 3300
+    // Return memory expansion: 0 -> 96 bytes = 3 words => 9 gas
+    // Child execution: PUSH1 + PUSH1 + RETURN = 6 gas
+    try testing.expectEqual(@as(u64, 3_336), vm.gas_used);
+}
