@@ -1,9 +1,9 @@
 # Zeth - Ethereum Virtual Machine in Zig
 
-[![CI Status](https://github.com/SMC17/eth-zig/workflows/CI/badge.svg)](https://github.com/SMC17/eth-zig/actions)
+[![CI Status](https://github.com/SMC17/zeth/workflows/CI/badge.svg)](https://github.com/SMC17/zeth/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Zig](https://img.shields.io/badge/Zig-0.15.1-orange.svg)](https://ziglang.org/)
-[![RLP Validated](https://img.shields.io/badge/RLP-98.8%25%20Ethereum%20Validated-green)](https://github.com/SMC17/eth-zig)
+[![Zig](https://img.shields.io/badge/Zig-0.14.1-orange.svg)](https://ziglang.org/)
+[![RLP Validated](https://img.shields.io/badge/RLP-98.8%25%20Ethereum%20Validated-green)](https://github.com/SMC17/zeth)
 
 **A production-grade Ethereum Virtual Machine implementation in Zig, designed for learning, development, and research.**
 
@@ -23,12 +23,13 @@ Zeth aims to be:
 
 ## Current Status
 
-### Implementation Progress
+### Measured Snapshot (February 17, 2026)
 
-- **Opcodes Implemented**: ~70/256 (~27%)
-- **Opcodes Validated**: 11/256 (100% passing reference tests)
-- **RLP**: 98.8% Ethereum validated (82/83 tests)
-- **Test Coverage**: 95+ internal tests, 100% passing
+- **Pinned Zig Version**: `0.14.1`
+- **Build/Test**: `zig build test` passes (106/106 tests)
+- **Opcode enum entries in source**: 143
+- **Opcode dispatch handlers in source**: 141
+- **Known core TODO markers**: 17 across `src/` + `validation/` critical paths
 
 ### What Works
 
@@ -42,12 +43,12 @@ Zeth aims to be:
 
 ### In Progress
 
-- Complete opcode implementation (~170 remaining)  
-- Full Ethereum test suite integration  
-- Gas cost verification for all opcodes  
-- Performance optimization  
+- Close semantic TODOs in opcode implementations
+- Expand reference validation coverage
+- Implement remaining missing opcode handlers
+- Improve gas-model and interoperability accuracy
 
-**Target**: 100% opcode parity within 6-8 weeks
+**Target**: 100% opcode parity with verified behavior
 
 ---
 
@@ -55,13 +56,13 @@ Zeth aims to be:
 
 ### Prerequisites
 
-- **Zig 0.15.1**: [Download](https://ziglang.org/download/)
+- **Zig 0.14.1**: [Download](https://ziglang.org/download/)
 - **Python 3.11+** (optional, for validation tools)
 
 ### Installation
 
 ```bash
-git clone https://github.com/SMC17/eth-zig.git
+git clone https://github.com/SMC17/zeth.git
 cd zeth
 zig build
 ```
@@ -245,8 +246,8 @@ MIT License - See [LICENSE](LICENSE)
 ## Get Involved
 
 - **Star** the repository
-- **Report** bugs via [Issues](https://github.com/SMC17/eth-zig/issues)
-- **Discuss** in [Discussions](https://github.com/SMC17/eth-zig/discussions)
+- **Report** bugs via [Issues](https://github.com/SMC17/zeth/issues)
+- **Discuss** in [Discussions](https://github.com/SMC17/zeth/discussions)
 - **Contribute** code or documentation
 - **Share** with Zig and Ethereum communities
 
@@ -254,6 +255,6 @@ MIT License - See [LICENSE](LICENSE)
 
 **Building systematically. Validating thoroughly. Launching with proof.**
 
-**Repository**: https://github.com/SMC17/eth-zig  
+**Repository**: https://github.com/SMC17/zeth  
 **Status**: v0.3.0-alpha (Week 4 - Professionalization)  
 **Goal**: 100% EVM parity (6-8 weeks)

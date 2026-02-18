@@ -4,7 +4,7 @@ Welcome to Zeth! This guide will help you get started with developing and contri
 
 ## Prerequisites
 
-- **Zig 0.15.1**: Download from [ziglang.org](https://ziglang.org/)
+- **Zig 0.14.1**: Download from [ziglang.org](https://ziglang.org/)
 - **Python 3.11+**: For validation tools (optional)
 - **Git**: For version control
 
@@ -17,6 +17,9 @@ cd zeth
 
 # Build the project
 zig build
+
+# Verify pinned toolchain
+zig version
 
 # Run tests
 zig build test
@@ -90,4 +93,3 @@ zig build
 - Review code examples
 
 Happy coding!
-

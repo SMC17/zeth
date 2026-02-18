@@ -3,7 +3,6 @@ const types = @import("types");
 
 /// Interface to reference Ethereum implementations (Geth, PyEVM)
 /// Uses subprocess execution to run bytecode and compare results
-
 pub const ReferenceResult = struct {
     success: bool,
     gas_used: u64,
@@ -11,7 +10,7 @@ pub const ReferenceResult = struct {
     stack: []types.U256,
     error_message: ?[]const u8,
     allocator: std.mem.Allocator,
-    
+
     pub fn deinit(self: *ReferenceResult) void {
         self.allocator.free(self.return_data);
         for (self.stack) |item| {
@@ -29,18 +28,18 @@ pub const ReferenceResult = struct {
 pub fn executeWithGeth(allocator: std.mem.Allocator, bytecode: []const u8, calldata: []const u8) !ReferenceResult {
     // For now, return a placeholder that indicates Geth is not yet integrated
     // TODO: Implement actual Geth subprocess execution
-    
+
     _ = bytecode;
     _ = calldata;
-    
-        return ReferenceResult{
-            .success = false,
-            .gas_used = 0,
-            .return_data = try allocator.dupe(u8, &[_]u8{}),
-            .stack = try allocator.alloc(types.U256, 0),
-            .error_message = try allocator.dupe(u8, "Geth interface not yet implemented"),
-            .allocator = allocator,
-        };
+
+    return ReferenceResult{
+        .success = false,
+        .gas_used = 0,
+        .return_data = try allocator.dupe(u8, &[_]u8{}),
+        .stack = try allocator.alloc(types.U256, 0),
+        .error_message = try allocator.dupe(u8, "Geth interface not yet implemented"),
+        .allocator = allocator,
+    };
 }
 
 /// Execute bytecode using PyEVM via Python subprocess
@@ -48,44 +47,44 @@ pub fn executeWithGeth(allocator: std.mem.Allocator, bytecode: []const u8, calld
 pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, calldata: []const u8) !ReferenceResult {
     // Use the pyevm_executor.py script (the working implementation)
     const script_path = "validation/pyevm_executor.py";
-    
+
     // Format bytecode and calldata as hex
     var bytecode_hex = try std.ArrayList(u8).initCapacity(allocator, bytecode.len * 2);
-    defer bytecode_hex.deinit(allocator);
-    var writer = bytecode_hex.writer(allocator);
+    defer bytecode_hex.deinit();
+    var writer = bytecode_hex.writer();
     for (bytecode) |b| {
         try writer.print("{x:02}", .{b});
     }
-    
+
     var calldata_hex = try std.ArrayList(u8).initCapacity(allocator, calldata.len * 2);
-    defer calldata_hex.deinit(allocator);
-    var calldata_writer = calldata_hex.writer(allocator);
+    defer calldata_hex.deinit();
+    var calldata_writer = calldata_hex.writer();
     for (calldata) |b| {
         try calldata_writer.print("{x:02}", .{b});
     }
-    
-    const bytecode_hex_str = try bytecode_hex.toOwnedSlice(allocator);
+
+    const bytecode_hex_str = try bytecode_hex.toOwnedSlice();
     defer allocator.free(bytecode_hex_str);
-    const calldata_hex_str = try calldata_hex.toOwnedSlice(allocator);
+    const calldata_hex_str = try calldata_hex.toOwnedSlice();
     defer allocator.free(calldata_hex_str);
-    
+
     // Execute Python script using temp file for output (workaround for Zig 0.15.1 pipe reading issues)
     const script_full_path = try std.fs.path.resolve(allocator, &.{script_path});
     defer allocator.free(script_full_path);
-    
+
     // Create unique temp file path
     const tmp_path = try std.fmt.allocPrint(allocator, "/tmp/zeth_pyevm_{d}.json", .{std.time.timestamp()});
     defer allocator.free(tmp_path);
-    
+
     // Use shell to redirect output to temp file
     const cmd = try std.fmt.allocPrint(allocator, "python3 {s} {s} {s} > {s} 2>&1", .{ script_full_path, bytecode_hex_str, calldata_hex_str, tmp_path });
     defer allocator.free(cmd);
-    
+
     var child = std.process.Child.init(&.{ "sh", "-c", cmd }, allocator);
     child.stdin_behavior = .Close;
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
-    
+
     child.spawn() catch |err| {
         return ReferenceResult{
             .success = false,
@@ -96,7 +95,7 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
             .allocator = allocator,
         };
     };
-    
+
     // Wait for process to complete
     const term = child.wait() catch |err| {
         return ReferenceResult{
@@ -108,7 +107,7 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
             .allocator = allocator,
         };
     };
-    
+
     // Read output from temp file
     const tmp_file = std.fs.cwd().openFile(tmp_path, .{}) catch |err| {
         // File might not exist if process failed
@@ -123,10 +122,10 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
     };
     defer tmp_file.close();
     defer std.fs.cwd().deleteFile(tmp_path) catch {};
-    
+
     const stdout = try tmp_file.readToEndAlloc(allocator, 1024 * 1024); // 1MB max
     defer allocator.free(stdout);
-    
+
     // Check exit code
     if (term != .Exited or term.Exited != 0) {
         return ReferenceResult{
@@ -138,7 +137,7 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
             .allocator = allocator,
         };
     }
-    
+
     // Parse JSON result from Python script
     const json_result = std.json.parseFromSlice(
         struct {
@@ -162,25 +161,25 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
         };
     };
     defer json_result.deinit();
-    
+
     const parsed = json_result.value;
-    
+
     // Parse return data hex
     const return_data_hex = parsed.return_data orelse "0x";
     const return_data = if (std.mem.startsWith(u8, return_data_hex, "0x"))
         try parseHex(allocator, return_data_hex[2..])
     else
         try parseHex(allocator, return_data_hex);
-    
+
     // Parse error if present (only set if error string is not null/empty)
-    const error_msg = if (parsed.@"error") |err| 
+    const error_msg = if (parsed.@"error") |err|
         if (err.len > 0)
             try allocator.dupe(u8, err)
         else
             null
     else
         null;
-    
+
     // Success is determined by parsed.success boolean, not by absence of error
     return ReferenceResult{
         .success = parsed.success,
@@ -197,7 +196,7 @@ fn parseHex(allocator: std.mem.Allocator, hex: []const u8) ![]const u8 {
     if (hex.len % 2 != 0) {
         return error.InvalidHex;
     }
-    
+
     var bytes = try allocator.alloc(u8, hex.len / 2);
     var i: usize = 0;
     while (i < bytes.len) {
@@ -206,7 +205,7 @@ fn parseHex(allocator: std.mem.Allocator, hex: []const u8) ![]const u8 {
         bytes[i] = (@as(u8, high) << 4) | low;
         i += 1;
     }
-    
+
     return bytes;
 }
 
@@ -227,15 +226,15 @@ pub fn isGethAvailable() bool {
     child.stdin_behavior = .Close;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
-    
+
     child.spawn() catch return false;
-    
+
     const term = child.wait() catch return false;
-    
+
     // Drain stdout/stderr
     if (child.stdout) |stdout_file| {
         var buf: [256]u8 = undefined;
-        var reader = stdout_file.reader(&buf);
+        var reader = stdout_file.reader();
         while (true) {
             const bytes_read = reader.read(&buf) catch break;
             if (bytes_read == 0) break;
@@ -243,13 +242,13 @@ pub fn isGethAvailable() bool {
     }
     if (child.stderr) |stderr_file| {
         var buf: [256]u8 = undefined;
-        var reader = stderr_file.reader(&buf);
+        var reader = stderr_file.reader();
         while (true) {
             const bytes_read = reader.read(&buf) catch break;
             if (bytes_read == 0) break;
         }
     }
-    
+
     return term == .Exited and term.Exited == 0;
 }
 
@@ -259,21 +258,21 @@ pub fn isPyEVMAvailable() bool {
     // Check if script file exists (use pyevm_executor.py)
     const script_file = std.fs.cwd().openFile("validation/pyevm_executor.py", .{}) catch return false;
     script_file.close();
-    
+
     // Check if PyEVM is importable
     var child = std.process.Child.init(&.{ "python3", "-c", "import eth; from eth.vm.forks import BerlinVM" }, std.heap.page_allocator);
     child.stdin_behavior = .Close;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
-    
+
     child.spawn() catch return false;
-    
+
     const term = child.wait() catch return false;
-    
+
     // Drain stdout/stderr
     if (child.stdout) |stdout_file| {
         var buf: [256]u8 = undefined;
-        var reader = stdout_file.reader(&buf);
+        var reader = stdout_file.reader();
         while (true) {
             const bytes_read = reader.read(&buf) catch break;
             if (bytes_read == 0) break;
@@ -281,13 +280,13 @@ pub fn isPyEVMAvailable() bool {
     }
     if (child.stderr) |stderr_file| {
         var buf: [256]u8 = undefined;
-        var reader = stderr_file.reader(&buf);
+        var reader = stderr_file.reader();
         while (true) {
             const bytes_read = reader.read(&buf) catch break;
             if (bytes_read == 0) break;
         }
     }
-    
+
     return term == .Exited and term.Exited == 0;
 }
 
@@ -296,10 +295,10 @@ const testing = std.testing;
 test "Reference interfaces: Check availability" {
     const geth_available = isGethAvailable();
     const pyevm_available = isPyEVMAvailable();
-    
+
     std.debug.print("Geth available: {}\n", .{geth_available});
     std.debug.print("PyEVM available: {}\n", .{pyevm_available});
-    
+
     // Test doesn't require either to be available - values are printed above
 }
 
@@ -308,10 +307,9 @@ test "Reference interfaces: Hex parsing" {
     const hex = "414243";
     const bytes_result = try parseHex(testing_allocator, hex);
     defer testing_allocator.free(bytes_result);
-    
+
     try testing.expectEqual(@as(usize, 3), bytes_result.len);
     try testing.expectEqual(@as(u8, 0x41), bytes_result[0]);
     try testing.expectEqual(@as(u8, 0x42), bytes_result[1]);
     try testing.expectEqual(@as(u8, 0x43), bytes_result[2]);
 }
-

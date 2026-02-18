@@ -5,7 +5,6 @@ const testing = std.testing;
 
 /// Comparison tool for testing our EVM against reference implementations
 /// This tool executes bytecode and compares results
-
 pub const ExecutionComparison = struct {
     our_result: evm.ExecutionResult,
     our_stack: []types.U256,
@@ -13,32 +12,32 @@ pub const ExecutionComparison = struct {
     our_storage: std.ArrayList(StorageEntry),
     our_gas: u64,
     our_error: ?anyerror,
-    
+
     reference_result: ?ReferenceResult = null,
     reference_gas: ?u64 = null,
     reference_error: ?[]const u8 = null,
-    
+
     matches: bool = false,
     discrepancies: std.ArrayList(Discrepancy),
-    
+
     const StorageEntry = struct {
         key: types.U256,
         value: types.U256,
     };
-    
+
     pub const ReferenceResult = struct {
         success: bool,
         return_data: []const u8,
         gas_used: u64,
     };
-    
+
     const Discrepancy = struct {
         category: []const u8,
         description: []const u8,
         our_value: []const u8,
         reference_value: []const u8,
     };
-    
+
     pub fn init(allocator: std.mem.Allocator) !ExecutionComparison {
         return ExecutionComparison{
             .our_result = undefined,
@@ -50,7 +49,7 @@ pub const ExecutionComparison = struct {
             .discrepancies = try std.ArrayList(Discrepancy).initCapacity(allocator, 0),
         };
     }
-    
+
     pub fn deinit(self: *ExecutionComparison, allocator: std.mem.Allocator) void {
         // Free all discrepancy strings that were duplicated in addDiscrepancy
         for (self.discrepancies.items) |disc| {
@@ -61,18 +60,18 @@ pub const ExecutionComparison = struct {
         }
         allocator.free(self.our_stack);
         allocator.free(self.our_memory);
-        self.our_storage.deinit(allocator);
-        self.discrepancies.deinit(allocator);
+        self.our_storage.deinit();
+        self.discrepancies.deinit();
     }
-    
+
     pub fn addDiscrepancy(self: *ExecutionComparison, category: []const u8, description: []const u8, our_val: []const u8, ref_val: []const u8, allocator: std.mem.Allocator) !void {
         // Duplicate strings so they outlive the caller's scope
         const cat_dup = try allocator.dupe(u8, category);
         const desc_dup = try allocator.dupe(u8, description);
         const our_dup = try allocator.dupe(u8, our_val);
         const ref_dup = try allocator.dupe(u8, ref_val);
-        
-        try self.discrepancies.append(allocator, Discrepancy{
+
+        try self.discrepancies.append(Discrepancy{
             .category = cat_dup,
             .description = desc_dup,
             .our_value = our_dup,
@@ -80,12 +79,12 @@ pub const ExecutionComparison = struct {
         });
         self.matches = false;
     }
-    
+
     pub fn format(self: ExecutionComparison, writer: anytype) !void {
         try writer.print("Execution Comparison:\n", .{});
         try writer.print("  Gas: Our={}, Reference={}\n", .{ self.our_gas, self.reference_gas orelse 0 });
         try writer.print("  Matches: {}\n", .{self.matches});
-        
+
         if (self.discrepancies.items.len > 0) {
             try writer.print("  Discrepancies ({d}):\n", .{self.discrepancies.items.len});
             for (self.discrepancies.items) |disc| {
@@ -101,34 +100,34 @@ pub const ExecutionComparison = struct {
 pub fn executeOurEVM(allocator: std.mem.Allocator, code: []const u8, calldata: []const u8, gas_limit: u64) !ExecutionComparison {
     var comparison = try ExecutionComparison.init(allocator);
     errdefer comparison.deinit(allocator);
-    
+
     var vm = try evm.EVM.init(allocator, gas_limit);
     defer vm.deinit();
-    
+
     const result = vm.execute(code, calldata) catch |err| {
         comparison.our_error = err;
         comparison.our_gas = vm.gas_used;
         return comparison;
     };
-    
+
     comparison.our_result = result;
     comparison.our_gas = result.gas_used;
-    
+
     // Capture stack state
     var stack = try std.ArrayList(types.U256).initCapacity(allocator, vm.stack.items.items.len);
-    defer stack.deinit(allocator);
+    defer stack.deinit();
     while (vm.stack.items.items.len > 0) {
         const value = vm.stack.pop() catch break;
-        try stack.append(allocator, value);
+        try stack.append(value);
     }
-    comparison.our_stack = try stack.toOwnedSlice(allocator);
-    
+    comparison.our_stack = try stack.toOwnedSlice();
+
     // Capture memory state (only copy used memory)
     comparison.our_memory = try allocator.dupe(u8, vm.memory.data.items);
-    
+
     // Capture storage state (simplified - would need to iterate storage map)
     // For now, we'll capture this during execution tracking
-    
+
     return comparison;
 }
 
@@ -136,14 +135,14 @@ pub fn executeOurEVM(allocator: std.mem.Allocator, code: []const u8, calldata: [
 pub fn formatBytecode(code: []const u8) ![]const u8 {
     const allocator = std.heap.page_allocator;
     var result = try std.ArrayList(u8).initCapacity(allocator, code.len * 3);
-    defer result.deinit(allocator);
-    
-    var writer = result.writer(allocator);
+    defer result.deinit();
+
+    var writer = result.writer();
     for (code) |byte| {
         try writer.print("{x:02} ", .{byte});
     }
-    
-    return try result.toOwnedSlice(allocator);
+
+    return try result.toOwnedSlice();
 }
 
 /// Compare two execution results
@@ -157,7 +156,7 @@ pub fn compareResults(allocator: std.mem.Allocator, our: *ExecutionComparison, r
         defer allocator.free(ref_str);
         try our.addDiscrepancy("Gas", "Gas consumption differs significantly", our_str, ref_str, allocator);
     }
-    
+
     // Compare success
     if (our.our_result.success != reference.success) {
         const our_str = if (our.our_result.success) "success" else "failure";
@@ -165,7 +164,7 @@ pub fn compareResults(allocator: std.mem.Allocator, our: *ExecutionComparison, r
         try our.addDiscrepancy("Execution", "Success status differs", our_str, ref_str, allocator);
         our.matches = false;
     }
-    
+
     // Compare return data
     if (!std.mem.eql(u8, our.our_result.return_data, reference.return_data)) {
         const our_hex = try formatHex(allocator, our.our_result.return_data);
@@ -174,10 +173,10 @@ pub fn compareResults(allocator: std.mem.Allocator, our: *ExecutionComparison, r
         defer allocator.free(ref_hex);
         try our.addDiscrepancy("Return Data", "Return data differs", our_hex, ref_hex, allocator);
     }
-    
+
     our.reference_result = reference;
     our.reference_gas = reference.gas_used;
-    
+
     // If no discrepancies, mark as matching
     our.matches = (our.discrepancies.items.len == 0);
 }
@@ -185,15 +184,15 @@ pub fn compareResults(allocator: std.mem.Allocator, our: *ExecutionComparison, r
 /// Format bytes as hex string
 fn formatHex(allocator: std.mem.Allocator, bytes: []const u8) ![]const u8 {
     var result = try std.ArrayList(u8).initCapacity(allocator, bytes.len * 2 + 2);
-    defer result.deinit(allocator);
-    
-    var writer = result.writer(allocator);
+    defer result.deinit();
+
+    var writer = result.writer();
     try writer.print("0x", .{});
     for (bytes) |byte| {
         try writer.print("{x:02}", .{byte});
     }
-    
-    return try result.toOwnedSlice(allocator);
+
+    return try result.toOwnedSlice();
 }
 
 /// Test suite for critical opcodes
@@ -241,7 +240,7 @@ pub const critical_opcode_tests = [_]OpcodeTestCase{
         .expected_stack_top = types.U256.fromU64(1),
         .description = "Simple modulo",
     },
-    
+
     // Storage
     .{
         .name = "SSTORE (cold set)",
@@ -257,7 +256,7 @@ pub const critical_opcode_tests = [_]OpcodeTestCase{
         .expected_gas = 2103, // PUSH1(3) + SLOAD cold(2100)
         .description = "Load from cold storage slot",
     },
-    
+
     // Memory
     .{
         .name = "MSTORE",
@@ -273,7 +272,7 @@ pub const critical_opcode_tests = [_]OpcodeTestCase{
         .expected_gas = 6, // PUSH1(3) + MLOAD(3) + memory expansion
         .description = "Load from memory",
     },
-    
+
     // Comparison
     .{
         .name = "LT",
@@ -304,7 +303,7 @@ pub const critical_opcode_tests = [_]OpcodeTestCase{
 /// Run test case and verify
 pub fn runTestCase(allocator: std.mem.Allocator, test_case: OpcodeTestCase) !ExecutionComparison {
     var comparison = try executeOurEVM(allocator, test_case.bytecode, test_case.calldata, 1000000);
-    
+
     // Verify expected values if provided
     if (test_case.expected_stack_top) |expected| {
         if (comparison.our_stack.len > 0) {
@@ -318,7 +317,7 @@ pub fn runTestCase(allocator: std.mem.Allocator, test_case: OpcodeTestCase) !Exe
             }
         }
     }
-    
+
     if (test_case.expected_gas) |expected_gas| {
         if (comparison.our_gas != expected_gas) {
             const actual_str = try std.fmt.allocPrint(allocator, "{}", .{comparison.our_gas});
@@ -328,7 +327,7 @@ pub fn runTestCase(allocator: std.mem.Allocator, test_case: OpcodeTestCase) !Exe
             try comparison.addDiscrepancy("Gas", "Gas cost differs", actual_str, expected_str, allocator);
         }
     }
-    
+
     return comparison;
 }
 
@@ -336,9 +335,8 @@ test "Comparison tool: Basic execution" {
     const test_case = critical_opcode_tests[0]; // ADD
     var comparison = try runTestCase(testing.allocator, test_case);
     defer comparison.deinit(testing.allocator);
-    
+
     try testing.expect(comparison.our_result.success);
     try testing.expect(comparison.our_gas > 0);
     try testing.expect(comparison.our_stack.len > 0);
 }
-
