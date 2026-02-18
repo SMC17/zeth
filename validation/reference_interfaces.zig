@@ -180,12 +180,17 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
     else
         null;
 
+    var stack_values = try allocator.alloc(types.U256, parsed.stack.len);
+    for (parsed.stack, 0..) |v, i| {
+        stack_values[i] = types.U256.fromU64(v);
+    }
+
     // Success is determined by parsed.success boolean, not by absence of error
     return ReferenceResult{
         .success = parsed.success,
         .gas_used = parsed.gas_used orelse 0,
         .return_data = return_data,
-        .stack = try allocator.alloc(types.U256, 0), // TODO: Parse stack from JSON
+        .stack = stack_values,
         .error_message = error_msg,
         .allocator = allocator,
     };

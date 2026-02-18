@@ -50,6 +50,8 @@ pub const EVM = struct {
     logs: std.ArrayList(Log),
     // Track warm storage accesses for EIP-2200
     warm_storage: std.AutoHashMap(types.U256, void),
+    // Track warm account accesses for EIP-2929
+    warm_accounts: std.AutoHashMap(types.Address, void),
     // Return data from last CALL/CREATE/DELEGATECALL (for RETURNDATACOPY)
     return_data: []const u8 = &[_]u8{},
     // State database for external account lookups (optional)
@@ -66,6 +68,7 @@ pub const EVM = struct {
             .context = ExecutionContext.default(),
             .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
             .warm_storage = std.AutoHashMap(types.U256, void).init(allocator),
+            .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .state_db = null,
         };
     }
@@ -81,6 +84,7 @@ pub const EVM = struct {
             .context = context,
             .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
             .warm_storage = std.AutoHashMap(types.U256, void).init(allocator),
+            .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .state_db = null,
         };
     }
@@ -96,6 +100,7 @@ pub const EVM = struct {
             .context = context,
             .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
             .warm_storage = std.AutoHashMap(types.U256, void).init(allocator),
+            .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .state_db = state_db,
         };
     }
@@ -106,6 +111,7 @@ pub const EVM = struct {
         self.storage.deinit();
         self.logs.deinit();
         self.warm_storage.deinit();
+        self.warm_accounts.deinit();
     }
 
     /// Calculate gas cost for memory expansion
@@ -200,6 +206,14 @@ pub const EVM = struct {
         }
 
         return result;
+    }
+
+    fn accountAccessCost(self: *EVM, address: types.Address) !u64 {
+        if (self.warm_accounts.contains(address)) {
+            return 100; // warm account access cost
+        }
+        try self.warm_accounts.put(address, {});
+        return 2600; // cold account access cost
     }
 
     pub fn execute(self: *EVM, code: []const u8, data: []const u8) !ExecutionResult {
@@ -404,6 +418,7 @@ pub const EVM = struct {
             .RETURN => try self.opReturn(),
             .REVERT => try self.opRevert(),
             .CALL => try self.opCall(),
+            .CALLCODE => try self.opCallCode(),
             .STATICCALL => try self.opStaticCall(),
             .DELEGATECALL => try self.opDelegateCall(),
             .CREATE => try self.opCreate(),
@@ -1055,9 +1070,7 @@ pub const EVM = struct {
             try self.stack.push(self.allocator, types.U256.zero());
         }
 
-        // EIP-2929: Cold access charge for first access to account
-        // TODO: Track warm account accesses
-        self.gas_used += 100; // Simplified: warm access cost
+        self.gas_used += try self.accountAccessCost(address);
     }
 
     fn opExtCodeSize(self: *EVM) !void {
@@ -1073,16 +1086,15 @@ pub const EVM = struct {
         // Look up code size from state if available
         if (self.state_db) |db| {
             _ = db.getAccount(address) catch types.Account.empty();
-            // TODO: Get actual code size from account
+            // No code bytes are tracked yet in StateDB account model.
+            // Keep behavior deterministic until code persistence is added.
             try self.stack.push(self.allocator, types.U256.zero());
         } else {
             // No state database - return 0
             try self.stack.push(self.allocator, types.U256.zero());
         }
 
-        // EIP-2929: Cold access charge for first access to account
-        // TODO: Track warm account accesses
-        self.gas_used += 100; // Simplified: warm access cost
+        self.gas_used += try self.accountAccessCost(address);
     }
 
     fn opExtCodeCopy(self: *EVM) !void {
@@ -1096,7 +1108,7 @@ pub const EVM = struct {
         var address_bytes: [20]u8 = undefined;
         const value_bytes = address_u256.toBytes();
         @memcpy(&address_bytes, value_bytes[12..32]);
-        _ = types.Address{ .bytes = address_bytes }; // TODO: Use address when copying actual code
+        const address = types.Address{ .bytes = address_bytes };
 
         _ = code_offset_u256; // TODO: Use code offset when copying actual code
         const mem_offset = mem_offset_u256.limbs[0];
@@ -1113,16 +1125,16 @@ pub const EVM = struct {
             try self.memory.data.resize(new_size);
         }
 
-        // TODO: Copy actual external code from state
-        // For now, zero out memory
+        // StateDB currently does not persist code bytes for accounts.
+        // Until that exists, EXTCODECOPY returns zeroed bytes.
         if (length > 0) {
             @memset(self.memory.data.items[mem_offset..][0..length], 0);
         }
 
-        // Gas cost: 20 base + 100 cold access (EIP-2929) + memory expansion + copy cost
+        // Gas cost: 20 base + account access (EIP-2929) + memory expansion + copy cost
         const mem_cost = self.memoryExpansionCost(new_size);
         const copy_cost = (length + 31) / 32; // Words to copy (minimum 1)
-        self.gas_used += 20 + 100 + mem_cost + copy_cost; // EIP-2929 cold access included
+        self.gas_used += 20 + mem_cost + copy_cost + try self.accountAccessCost(address);
     }
 
     fn opExtCodeHash(self: *EVM) !void {
@@ -1138,17 +1150,17 @@ pub const EVM = struct {
         // Look up code hash from state if available
         if (self.state_db) |db| {
             _ = db.getAccount(address) catch types.Account.empty();
-            // TODO: Get actual code hash from account
-            // Returns keccak256(code) or 0 if account doesn't exist
-            try self.stack.push(self.allocator, types.U256.zero());
+            // StateDB currently stores only code_hash, not code bytes. Returning the
+            // stored code_hash when account exists keeps behavior deterministic.
+            const account = db.getAccount(address) catch types.Account.empty();
+            var hash_as_u256 = types.U256.zero();
+            hash_as_u256 = types.U256.fromBytes(account.code_hash.bytes);
+            try self.stack.push(self.allocator, hash_as_u256);
         } else {
             // No state database - return 0
             try self.stack.push(self.allocator, types.U256.zero());
         }
-
-        // EIP-2929: Cold access charge for first access to account
-        // TODO: Track warm account accesses
-        self.gas_used += 100; // Simplified: warm access cost
+        self.gas_used += try self.accountAccessCost(address);
     }
 
     // Block information opcodes
@@ -1199,7 +1211,13 @@ pub const EVM = struct {
 
         // Blockhash is only available for blocks within the last 256 blocks
         // If block_number is outside this range, return 0
-        if (block_number >= current_block or block_number < current_block - 256) {
+        if (block_number >= current_block) {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += 20;
+            return;
+        }
+        const distance = current_block - block_number;
+        if (distance > 256) {
             try self.stack.push(self.allocator, types.U256.zero());
             self.gas_used += 20;
             return;
@@ -1336,6 +1354,28 @@ pub const EVM = struct {
         // Simplified STATICCALL
         _ = gas;
         _ = address;
+        _ = args_offset;
+        _ = args_length;
+        _ = ret_offset;
+        _ = ret_length;
+
+        try self.stack.push(self.allocator, types.U256.one()); // Success
+        self.gas_used += 700;
+    }
+
+    fn opCallCode(self: *EVM) !void {
+        const gas = try self.stack.pop();
+        const address = try self.stack.pop();
+        const value = try self.stack.pop();
+        const args_offset = try self.stack.pop();
+        const args_length = try self.stack.pop();
+        const ret_offset = try self.stack.pop();
+        const ret_length = try self.stack.pop();
+
+        // Simplified CALLCODE (same execution placeholder as CALL family).
+        _ = gas;
+        _ = address;
+        _ = value;
         _ = args_offset;
         _ = args_length;
         _ = ret_offset;

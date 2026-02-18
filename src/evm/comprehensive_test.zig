@@ -130,6 +130,49 @@ test "EVM: SAR preserves sign bit for negative values" {
     try testing.expectEqual(@as(u64, 0xFFFFFFFFFFFFFFFF), result.limbs[3]);
 }
 
+test "EVM: CALLCODE opcode executes placeholder path" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1000000);
+    defer vm.deinit();
+
+    // CALLCODE(gas, addr, value, argsOff, argsLen, retOff, retLen)
+    const bytecode = [_]u8{
+        0x60, 0x00, // retLen
+        0x60, 0x00, // retOff
+        0x60, 0x00, // argsLen
+        0x60, 0x00, // argsOff
+        0x60, 0x00, // value
+        0x60, 0x00, // address
+        0x60, 0x64, // gas
+        0xf2, // CALLCODE
+    };
+
+    _ = try vm.execute(&bytecode, &[_]u8{});
+    const result = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), result.limbs[0]);
+}
+
+test "EVM: BLOCKHASH does not underflow for low block numbers" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var context = evm.ExecutionContext.default();
+    context.block_number = 1;
+    var vm = try evm.EVM.initWithContext(allocator, 1000000, context);
+    defer vm.deinit();
+
+    const bytecode = [_]u8{
+        0x60, 0x00, // PUSH1 block 0
+        0x40, // BLOCKHASH
+    };
+
+    _ = try vm.execute(&bytecode, &[_]u8{});
+    const result = try vm.stack.pop();
+    try testing.expect(result.isZero());
+}
+
 test "EVM: Stack operations (DUP and SWAP)" {
     const testing = std.testing;
     const allocator = testing.allocator;
