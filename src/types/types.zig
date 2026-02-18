@@ -353,10 +353,28 @@ pub const Transaction = struct {
     s: U256,
 
     pub fn hash(self: *const Transaction, allocator: std.mem.Allocator) !Hash {
-        _ = allocator;
-        _ = self;
-        // TODO: Implement RLP encoding and hashing
-        return Hash.zero;
+        var encoded = std.ArrayList(u8).init(allocator);
+        defer encoded.deinit();
+
+        try appendU64(&encoded, self.nonce);
+        try appendU64(&encoded, self.gas_price);
+        try appendU64(&encoded, self.gas_limit);
+
+        if (self.to) |to_addr| {
+            try appendBytesPrefixed(&encoded, &to_addr.bytes);
+        } else {
+            try appendBytesPrefixed(&encoded, &[_]u8{});
+        }
+
+        try appendU128(&encoded, self.value);
+        try appendBytesPrefixed(&encoded, self.data);
+        try encoded.append(self.v);
+        try appendU256(&encoded, self.r);
+        try appendU256(&encoded, self.s);
+
+        var hash_bytes: [32]u8 = undefined;
+        std.crypto.hash.sha3.Keccak256.hash(encoded.items, &hash_bytes, .{});
+        return Hash{ .bytes = hash_bytes };
     }
 };
 
@@ -379,10 +397,28 @@ pub const BlockHeader = struct {
     nonce: u64,
 
     pub fn hash(self: *const BlockHeader, allocator: std.mem.Allocator) !Hash {
-        _ = allocator;
-        _ = self;
-        // TODO: Implement RLP encoding and hashing
-        return Hash.zero;
+        var encoded = std.ArrayList(u8).init(allocator);
+        defer encoded.deinit();
+
+        try appendBytesPrefixed(&encoded, &self.parent_hash.bytes);
+        try appendBytesPrefixed(&encoded, &self.uncle_hash.bytes);
+        try appendBytesPrefixed(&encoded, &self.coinbase.bytes);
+        try appendBytesPrefixed(&encoded, &self.root.bytes);
+        try appendBytesPrefixed(&encoded, &self.tx_hash.bytes);
+        try appendBytesPrefixed(&encoded, &self.receipt_hash.bytes);
+        try appendBytesPrefixed(&encoded, &self.bloom);
+        try appendU256(&encoded, self.difficulty);
+        try appendU64(&encoded, self.number);
+        try appendU64(&encoded, self.gas_limit);
+        try appendU64(&encoded, self.gas_used);
+        try appendU64(&encoded, self.timestamp);
+        try appendBytesPrefixed(&encoded, self.extra_data);
+        try appendBytesPrefixed(&encoded, &self.mix_digest.bytes);
+        try appendU64(&encoded, self.nonce);
+
+        var hash_bytes: [32]u8 = undefined;
+        std.crypto.hash.sha3.Keccak256.hash(encoded.items, &hash_bytes, .{});
+        return Hash{ .bytes = hash_bytes };
     }
 };
 
@@ -413,6 +449,30 @@ pub const Account = struct {
         };
     }
 };
+
+fn appendBytesPrefixed(out: *std.ArrayList(u8), bytes: []const u8) !void {
+    var len_buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &len_buf, bytes.len, .big);
+    try out.appendSlice(&len_buf);
+    try out.appendSlice(bytes);
+}
+
+fn appendU64(out: *std.ArrayList(u8), value: u64) !void {
+    var buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &buf, value, .big);
+    try out.appendSlice(&buf);
+}
+
+fn appendU128(out: *std.ArrayList(u8), value: u128) !void {
+    var buf: [16]u8 = undefined;
+    std.mem.writeInt(u128, &buf, value, .big);
+    try out.appendSlice(&buf);
+}
+
+fn appendU256(out: *std.ArrayList(u8), value: U256) !void {
+    const bytes = value.toBytes();
+    try out.appendSlice(&bytes);
+}
 
 test "Address creation and formatting" {
     const testing = std.testing;
@@ -457,4 +517,60 @@ test "Hash creation" {
     const h2 = Hash.zero;
 
     try testing.expect(h1.eql(h2));
+}
+
+test "Transaction hash deterministic and nonce-sensitive" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tx = Transaction{
+        .nonce = 1,
+        .gas_price = 1_000_000_000,
+        .gas_limit = 21_000,
+        .to = Address.zero,
+        .value = 42,
+        .data = &[_]u8{ 0xaa, 0xbb },
+        .v = 27,
+        .r = U256.fromU64(1),
+        .s = U256.fromU64(2),
+    };
+
+    const h1 = try tx.hash(allocator);
+    const h2 = try tx.hash(allocator);
+    try testing.expect(h1.eql(h2));
+
+    tx.nonce = 2;
+    const h3 = try tx.hash(allocator);
+    try testing.expect(!h1.eql(h3));
+}
+
+test "BlockHeader hash deterministic and field-sensitive" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var header = BlockHeader{
+        .parent_hash = Hash.zero,
+        .uncle_hash = Hash.zero,
+        .coinbase = Address.zero,
+        .root = Hash.zero,
+        .tx_hash = Hash.zero,
+        .receipt_hash = Hash.zero,
+        .bloom = [_]u8{0} ** 256,
+        .difficulty = U256.fromU64(100),
+        .number = 1,
+        .gas_limit = 30_000_000,
+        .gas_used = 21_000,
+        .timestamp = 1_700_000_000,
+        .extra_data = "zeth",
+        .mix_digest = Hash.zero,
+        .nonce = 1,
+    };
+
+    const h1 = try header.hash(allocator);
+    const h2 = try header.hash(allocator);
+    try testing.expect(h1.eql(h2));
+
+    header.number = 2;
+    const h3 = try header.hash(allocator);
+    try testing.expect(!h1.eql(h3));
 }
