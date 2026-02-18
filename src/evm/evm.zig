@@ -43,6 +43,7 @@ pub const EVM = struct {
     allocator: std.mem.Allocator,
     gas_limit: u64,
     gas_used: u64,
+    gas_refund: u64,
     stack: Stack,
     memory: Memory,
     storage: Storage,
@@ -66,6 +67,7 @@ pub const EVM = struct {
             .allocator = allocator,
             .gas_limit = gas_limit,
             .gas_used = 0,
+            .gas_refund = 0,
             .stack = try Stack.init(allocator),
             .memory = try Memory.init(allocator),
             .storage = Storage.init(allocator),
@@ -83,6 +85,7 @@ pub const EVM = struct {
             .allocator = allocator,
             .gas_limit = gas_limit,
             .gas_used = 0,
+            .gas_refund = 0,
             .stack = try Stack.init(allocator),
             .memory = try Memory.init(allocator),
             .storage = Storage.init(allocator),
@@ -100,6 +103,7 @@ pub const EVM = struct {
             .allocator = allocator,
             .gas_limit = gas_limit,
             .gas_used = 0,
+            .gas_refund = 0,
             .stack = try Stack.init(allocator),
             .memory = try Memory.init(allocator),
             .storage = Storage.init(allocator),
@@ -222,6 +226,13 @@ pub const EVM = struct {
     }
 
     fn accountAccessCost(self: *EVM, address: types.Address) !u64 {
+        // EIP-2929: precompile addresses (0x01..0x09) are always warm.
+        if (precompileId(address) != null) {
+            if (!self.warm_accounts.contains(address)) {
+                try self.warm_accounts.put(address, {});
+            }
+            return 100;
+        }
         if (self.warm_accounts.contains(address)) {
             return 100; // warm account access cost
         }
@@ -430,6 +441,7 @@ pub const EVM = struct {
                     return ExecutionResult{
                         .success = false,
                         .gas_used = self.gas_used,
+                        .gas_refund = self.gas_refund,
                         .return_data = if (self.return_data.len == 0) &[_]u8{} else try self.allocator.dupe(u8, self.return_data),
                         .logs = &[_]Log{},
                     };
@@ -441,6 +453,7 @@ pub const EVM = struct {
         return ExecutionResult{
             .success = true,
             .gas_used = self.gas_used,
+            .gas_refund = self.gas_refund,
             .return_data = if (self.return_data.len == 0) &[_]u8{} else try self.allocator.dupe(u8, self.return_data),
             .logs = try self.logs.toOwnedSlice(),
         };
@@ -2043,7 +2056,8 @@ pub const EVM = struct {
             } else {
                 // Cold delete: 2100 already charged, operation cost is 0 (refund case)
             }
-            // Refund handled separately (not implemented yet)
+            // EIP-3529: SSTORE clear refund
+            self.gas_refund += 4800;
         } else if (current_value.isZero() and !new_value.isZero()) {
             // Set new value: 20000 gas for the SSTORE operation
             self.gas_used += 20000;
@@ -2403,6 +2417,7 @@ const Storage = struct {
 pub const ExecutionResult = struct {
     success: bool,
     gas_used: u64,
+    gas_refund: u64,
     return_data: []const u8,
     logs: []const Log,
 

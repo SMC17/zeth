@@ -940,7 +940,7 @@ test "EVM: CALL gas includes value transfer and new-account cost" {
         0x60, 0x00, // inSize
         0x60, 0x00, // inOffset
         0x60, 0x01, // value
-        0x60, 0x02, // address (new account)
+        0x60, 0x0a, // address (new account, non-precompile)
         0x61, 0xff, 0xff, // gas
         0xf1, // CALL
     };
@@ -950,8 +950,8 @@ test "EVM: CALL gas includes value transfer and new-account cost" {
     defer allocator.free(res.logs);
     const success = try vm.stack.pop();
     try testing.expectEqual(@as(u64, 1), success.limbs[0]);
-    // 700 + 2600(cold) + 9000(value) + 25000(new account) = 37300 minimum.
-    try testing.expect(vm.gas_used >= 37_300);
+    // PUSHes (7 * 3) + CALL base (700 + 2600 cold + 9000 value + 25000 new account).
+    try testing.expectEqual(@as(u64, 37_321), vm.gas_used);
 }
 
 test "EVM: CREATE2 charges additional hashcost over CREATE for same init code length" {
@@ -997,7 +997,10 @@ test "EVM: CREATE2 charges additional hashcost over CREATE for same init code le
     defer if (r2.return_data.len > 0) allocator.free(r2.return_data);
     defer allocator.free(r2.logs);
 
-    try testing.expect(vm_create2.gas_used >= vm_create.gas_used + 12);
+    // CREATE: 3 PUSH1 + (32000 + 6 mem + 6 copy) = 32021
+    try testing.expectEqual(@as(u64, 32_021), vm_create.gas_used);
+    // CREATE2: 4 PUSH1 + (32000 + 6 mem + 6 copy + 12 hashcost) = 32036
+    try testing.expectEqual(@as(u64, 32_036), vm_create2.gas_used);
 }
 
 test "EVM: CALL OOG in child obeys EIP-150 reserve and does not exhaust parent" {
@@ -1036,4 +1039,126 @@ test "EVM: CALL OOG in child obeys EIP-150 reserve and does not exhaust parent" 
     try testing.expect(call_success.isZero());
     // EIP-150 reserve should leave parent with remaining gas.
     try testing.expect(vm.gas_used < vm.gas_limit);
+}
+
+test "EVM: CALL cold then warm account access has exact gas" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var vm = try evm.EVM.initWithState(allocator, 100_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        // First CALL to 0x0a (cold): 7 PUSH1 + CALL
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x0a, // address
+        0x60, 0xff, // gas
+        0xf1, // CALL
+        // Second CALL to 0x0a (warm): 7 PUSH1 + CALL
+        0x60,
+        0x00,
+        0x60,
+        0x00,
+        0x60,
+        0x00,
+        0x60,
+        0x00,
+        0x60,
+        0x00,
+        0x60,
+        0x0a,
+        0x60,
+        0xff,
+        0xf1,
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    // First call: 21 + (700 + 2600) = 3321
+    // Second call: 21 + (700 + 100) = 821
+    try testing.expectEqual(@as(u64, 4_142), vm.gas_used);
+}
+
+test "EVM: SLOAD cold then warm has exact gas" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 100_000);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x01, // PUSH1 key
+        0x54, // SLOAD (cold)
+        0x60, 0x01, // PUSH1 key
+        0x54, // SLOAD (warm)
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    // PUSH1 + SLOAD(cold) + PUSH1 + SLOAD(warm) = 3 + 2100 + 3 + 100
+    try testing.expectEqual(@as(u64, 2_206), vm.gas_used);
+}
+
+test "EVM: SSTORE clear tracks refund and exact gas" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 100_000);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        // SSTORE key=1 value=7 (cold, zero->nonzero): 3+3 + 2100 + 20000
+        0x60, 0x07, // PUSH1 value
+        0x60, 0x01, // PUSH1 key
+        0x55, // SSTORE
+        // SSTORE key=1 value=0 (warm, nonzero->zero): 3+3 + 100, refund +4800
+        0x60, 0x00, // PUSH1 value
+        0x60, 0x01, // PUSH1 key
+        0x55, // SSTORE
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    try testing.expectEqual(@as(u64, 22_212), vm.gas_used);
+    try testing.expectEqual(@as(u64, 4_800), vm.gas_refund);
+}
+
+test "EVM: CALL to precompile address uses warm access cost" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 100_000);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x02, // precompile SHA256 address
+        0x60, 0xff, // gas
+        0xf1, // CALL
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    // CALL base is 700 + warm(100); no calldata, no return copy, precompile gas is 60.
+    // Plus 7 PUSH1 operations.
+    try testing.expectEqual(@as(u64, 881), vm.gas_used);
 }
