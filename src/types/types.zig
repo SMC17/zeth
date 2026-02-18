@@ -149,30 +149,71 @@ pub const U256 = struct {
 
     pub fn div(self: U256, other: U256) U256 {
         if (other.isZero()) return U256.zero();
+        if (self.lt(other)) return U256.zero();
 
-        // Simplified division for small values
-        if (other.limbs[1] == 0 and other.limbs[2] == 0 and other.limbs[3] == 0 and
-            self.limbs[1] == 0 and self.limbs[2] == 0 and self.limbs[3] == 0)
-        {
-            return U256.fromU64(self.limbs[0] / other.limbs[0]);
-        }
-
-        // For larger values, use long division (simplified)
-        // TODO: Implement proper Knuth division algorithm
-        return U256.zero();
+        const div_result = self.divMod(other);
+        return div_result.quotient;
     }
 
     pub fn mod(self: U256, other: U256) U256 {
         if (other.isZero()) return U256.zero();
+        if (self.lt(other)) return self;
 
-        // Simplified modulo for small values
-        if (other.limbs[1] == 0 and other.limbs[2] == 0 and other.limbs[3] == 0 and
-            self.limbs[1] == 0 and self.limbs[2] == 0 and self.limbs[3] == 0)
-        {
-            return U256.fromU64(self.limbs[0] % other.limbs[0]);
+        const div_result = self.divMod(other);
+        return div_result.remainder;
+    }
+
+    fn getBit(self: U256, bit_index: usize) bool {
+        const limb_idx = bit_index / 64;
+        const bit_in_limb: u6 = @intCast(bit_index % 64);
+        return ((self.limbs[limb_idx] >> bit_in_limb) & 1) != 0;
+    }
+
+    fn setBit(self: *U256, bit_index: usize) void {
+        const limb_idx = bit_index / 64;
+        const bit_in_limb: u6 = @intCast(bit_index % 64);
+        self.limbs[limb_idx] |= (@as(u64, 1) << bit_in_limb);
+    }
+
+    fn shl1(self: U256) U256 {
+        var result = U256.zero();
+        var carry: u64 = 0;
+        for (0..4) |i| {
+            const next_carry = self.limbs[i] >> 63;
+            result.limbs[i] = (self.limbs[i] << 1) | carry;
+            carry = next_carry;
+        }
+        return result;
+    }
+
+    const DivModResult = struct {
+        quotient: U256,
+        remainder: U256,
+    };
+
+    fn divMod(self: U256, divisor: U256) DivModResult {
+        var quotient = U256.zero();
+        var remainder = U256.zero();
+
+        var bit: usize = 256;
+        while (bit > 0) {
+            bit -= 1;
+
+            remainder = remainder.shl1();
+            if (self.getBit(bit)) {
+                remainder.limbs[0] |= 1;
+            }
+
+            if (!remainder.lt(divisor)) {
+                remainder = remainder.sub(divisor);
+                quotient.setBit(bit);
+            }
         }
 
-        return U256.zero();
+        return DivModResult{
+            .quotient = quotient,
+            .remainder = remainder,
+        };
     }
 
     pub fn lt(self: U256, other: U256) bool {
@@ -390,6 +431,23 @@ test "U256 arithmetic" {
     try testing.expectEqual(@as(u64, 300), c.limbs[0]);
     try testing.expect(!c.isZero());
     try testing.expect(U256.zero().isZero());
+}
+
+test "U256 division and modulo for large values" {
+    const testing = std.testing;
+
+    // 2^128 / 2^64 = 2^64
+    const a = U256{ .limbs = [_]u64{ 0, 0, 1, 0 } };
+    const b = U256{ .limbs = [_]u64{ 0, 1, 0, 0 } };
+    const q = a.div(b);
+    try testing.expect(q.eq(U256{ .limbs = [_]u64{ 0, 1, 0, 0 } }));
+
+    // (2^128 + 5) mod 2^64 = 5
+    const c = U256{ .limbs = [_]u64{ 5, 0, 1, 0 } };
+    const d = U256{ .limbs = [_]u64{ 0, 1, 0, 0 } };
+    const r = c.mod(d);
+    try testing.expectEqual(@as(u64, 5), r.limbs[0]);
+    try testing.expect(r.limbs[1] == 0 and r.limbs[2] == 0 and r.limbs[3] == 0);
 }
 
 test "Hash creation" {
