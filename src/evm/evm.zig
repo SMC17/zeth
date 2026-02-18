@@ -53,6 +53,8 @@ pub const EVM = struct {
     warm_storage: std.AutoHashMap(types.U256, void),
     // Track warm account accesses for EIP-2929
     warm_accounts: std.AutoHashMap(types.Address, void),
+    // Track SELFDESTRUCTed accounts for one-time refund accounting.
+    selfdestructed_accounts: std.AutoHashMap(types.Address, void),
     // Optional block hash history for BLOCKHASH opcode.
     block_hashes: std.AutoHashMap(u64, types.Hash),
     // Return data from last CALL/CREATE/DELEGATECALL (for RETURNDATACOPY)
@@ -75,6 +77,7 @@ pub const EVM = struct {
             .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
             .warm_storage = std.AutoHashMap(types.U256, void).init(allocator),
             .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
+            .selfdestructed_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .block_hashes = std.AutoHashMap(u64, types.Hash).init(allocator),
             .state_db = null,
         };
@@ -93,6 +96,7 @@ pub const EVM = struct {
             .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
             .warm_storage = std.AutoHashMap(types.U256, void).init(allocator),
             .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
+            .selfdestructed_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .block_hashes = std.AutoHashMap(u64, types.Hash).init(allocator),
             .state_db = null,
         };
@@ -111,6 +115,7 @@ pub const EVM = struct {
             .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
             .warm_storage = std.AutoHashMap(types.U256, void).init(allocator),
             .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
+            .selfdestructed_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .block_hashes = std.AutoHashMap(u64, types.Hash).init(allocator),
             .state_db = state_db,
         };
@@ -124,6 +129,7 @@ pub const EVM = struct {
         self.logs.deinit();
         self.warm_storage.deinit();
         self.warm_accounts.deinit();
+        self.selfdestructed_accounts.deinit();
         self.block_hashes.deinit();
     }
 
@@ -1616,6 +1622,9 @@ pub const EVM = struct {
                     child_logs = child_result.logs;
                     call_success = child_result.success;
                     charged_child_gas = @min(child_result.gas_used, gas_plan.forwarded);
+                    if (child_result.success) {
+                        self.gas_refund += child_result.gas_refund;
+                    }
                 }
             }
         }
@@ -1764,6 +1773,9 @@ pub const EVM = struct {
         else
             @as(u64, @intCast(self.memory.data.items.len));
         const mem_cost = self.memoryExpansionCost(@intCast(new_size));
+        if (new_size > self.memory.data.items.len) {
+            try self.memory.data.resize(@intCast(new_size));
+        }
         const create_gas = 32000 + mem_cost + copy_gas;
         const available_gas = self.gas_limit -| self.gas_used;
         if (available_gas < create_gas) return error.OutOfGas;
@@ -1822,6 +1834,7 @@ pub const EVM = struct {
         try db.setCode(new_address, child_result.return_data);
         try self.setReturnData(child_result.return_data);
         try self.stack.push(self.allocator, addressToU256(new_address));
+        self.gas_refund += child_result.gas_refund;
         self.gas_used += create_gas + @min(child_result.gas_used, child_gas_limit);
     }
 
@@ -1840,6 +1853,9 @@ pub const EVM = struct {
         else
             @as(u64, @intCast(self.memory.data.items.len));
         const mem_cost = self.memoryExpansionCost(@intCast(new_size));
+        if (new_size > self.memory.data.items.len) {
+            try self.memory.data.resize(@intCast(new_size));
+        }
         const create2_gas = 32000 + mem_cost + copy_gas + hash_gas;
         const available_gas = self.gas_limit -| self.gas_used;
         if (available_gas < create2_gas) return error.OutOfGas;
@@ -1895,6 +1911,7 @@ pub const EVM = struct {
         try db.setCode(new_address, child_result.return_data);
         try self.setReturnData(child_result.return_data);
         try self.stack.push(self.allocator, addressToU256(new_address));
+        self.gas_refund += child_result.gas_refund;
         self.gas_used += create2_gas + @min(child_result.gas_used, child_gas_limit);
     }
 
@@ -1920,6 +1937,12 @@ pub const EVM = struct {
             }
 
             try db.destroyAccount(from);
+
+            if (!self.selfdestructed_accounts.contains(from)) {
+                try self.selfdestructed_accounts.put(from, {});
+                // EIP-3529: SELFDESTRUCT refund reduced to 4800.
+                self.gas_refund += 4800;
+            }
         }
 
         self.gas_used += selfdestruct_gas;

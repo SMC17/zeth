@@ -736,6 +736,8 @@ test "EVM: SELFDESTRUCT transfers balance and deletes account state" {
     try testing.expect(!db.exists(sender));
     const beneficiary_balance = try db.getBalance(beneficiary);
     try testing.expectEqual(@as(u64, 777), beneficiary_balance.limbs[0]);
+    try testing.expectEqual(@as(u64, 32_603), vm.gas_used);
+    try testing.expectEqual(@as(u64, 4_800), vm.gas_refund);
     const stored = try db.getStorage(sender, types.U256.fromU64(1));
     try testing.expect(stored.isZero());
     try testing.expectEqual(@as(usize, 0), db.getCode(sender).len);
@@ -1200,4 +1202,77 @@ test "EVM: CALL charges return-memory expansion gas exactly" {
     // Return memory expansion: 0 -> 96 bytes = 3 words => 9 gas
     // Child execution: PUSH1 + PUSH1 + RETURN = 6 gas
     try testing.expectEqual(@as(u64, 3_336), vm.gas_used);
+}
+
+test "EVM: CALL propagates child gas refund on successful execution" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var callee = types.Address.zero;
+    callee.bytes[19] = 0x0a;
+
+    // Child clears a pre-set non-zero slot, earning SSTORE clear refund.
+    const callee_code = [_]u8{
+        0x60, 0x00, // value
+        0x60, 0x01, // key
+        0x55, // SSTORE
+        0x00, // STOP
+    };
+    try db.setCode(callee, &callee_code);
+    try db.setStorage(callee, types.U256.fromU64(1), types.U256.fromU64(7));
+
+    var vm = try evm.EVM.initWithState(allocator, 200_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const caller = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x0a, // address
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+    };
+
+    const result = try vm.execute(&caller, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    // Parent: 21 push gas + (700 + 2600 cold access)
+    // Child: PUSH1 + PUSH1 + SSTORE(cold clear) + STOP = 3 + 3 + 2100 + 0
+    try testing.expectEqual(@as(u64, 5_427), vm.gas_used);
+    try testing.expectEqual(@as(u64, 4_800), vm.gas_refund);
+}
+
+test "EVM: CREATE memory expansion persists across repeated creates" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 200_000);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        // First CREATE with len=32 expands memory from 0 to 32 bytes.
+        0x60, 0x20, // len
+        0x60, 0x00, // offset
+        0x60, 0x00, // value
+        0xf0, // CREATE
+        // Second CREATE with same memory range should pay no additional expansion.
+        0x60, 0x20, // len
+        0x60, 0x00, // offset
+        0x60, 0x00, // value
+        0xf0, // CREATE
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    // First: 9 push + (32000 + 3 mem + 3 copy) = 32015
+    // Second: 9 push + (32000 + 0 mem + 3 copy) = 32012
+    try testing.expectEqual(@as(u64, 64_027), vm.gas_used);
 }
