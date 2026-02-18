@@ -302,6 +302,84 @@ pub const EVM = struct {
         return types.U256.fromBytes(hash);
     }
 
+    fn precompileId(address: types.Address) ?u8 {
+        for (address.bytes[0..19]) |b| {
+            if (b != 0) return null;
+        }
+        const id = address.bytes[19];
+        return if (id >= 1 and id <= 9) id else null;
+    }
+
+    const PrecompileResult = struct {
+        success: bool,
+        gas_used: u64,
+        output: []u8,
+    };
+
+    fn runPrecompile(self: *EVM, id: u8, input: []const u8, forwarded_gas: u64) !PrecompileResult {
+        const words = (input.len + 31) / 32;
+        const required_gas: u64 = switch (id) {
+            1 => 3000, // ECRECOVER
+            2 => 60 + 12 * words, // SHA256
+            3 => 600 + 120 * words, // RIPEMD160
+            else => forwarded_gas,
+        };
+
+        if (required_gas > forwarded_gas) {
+            return PrecompileResult{
+                .success = false,
+                .gas_used = forwarded_gas,
+                .output = try self.allocator.alloc(u8, 0),
+            };
+        }
+
+        switch (id) {
+            1 => {
+                var in_buf = [_]u8{0} ** 128;
+                const in_len = @min(input.len, in_buf.len);
+                @memcpy(in_buf[0..in_len], input[0..in_len]);
+
+                const msg_hash = in_buf[0..32].*;
+                const v_word = in_buf[32..64];
+                const v = v_word[31];
+                const r = in_buf[64..96].*;
+                const s = in_buf[96..128].*;
+
+                if (crypto.ecrecoverAddress(msg_hash, v, r, s)) |addr| {
+                    const out = try self.allocator.alloc(u8, 32);
+                    @memset(out, 0);
+                    @memcpy(out[12..32], addr[0..20]);
+                    return PrecompileResult{ .success = true, .gas_used = required_gas, .output = out };
+                }
+                return PrecompileResult{
+                    .success = true,
+                    .gas_used = required_gas,
+                    .output = try self.allocator.alloc(u8, 0),
+                };
+            },
+            2 => {
+                const out = try self.allocator.alloc(u8, 32);
+                std.crypto.hash.sha2.Sha256.hash(input, out[0..32], .{});
+                return PrecompileResult{ .success = true, .gas_used = required_gas, .output = out };
+            },
+            3 => {
+                const out = try self.allocator.alloc(u8, 32);
+                @memset(out, 0);
+                var h: [20]u8 = undefined;
+                crypto.ripemd160(input, &h);
+                @memcpy(out[12..32], h[0..20]);
+                return PrecompileResult{ .success = true, .gas_used = required_gas, .output = out };
+            },
+            else => {
+                return PrecompileResult{
+                    .success = false,
+                    .gas_used = required_gas,
+                    .output = try self.allocator.alloc(u8, 0),
+                };
+            },
+        }
+    }
+
     fn deriveCreateAddress(sender: types.Address, nonce: u64) types.Address {
         var preimage: [28]u8 = undefined;
         @memcpy(preimage[0..20], sender.bytes[0..20]);
@@ -1486,7 +1564,13 @@ pub const EVM = struct {
             !call_value.isZero(),
         );
 
-        if (self.state_db) |db| {
+        if (precompileId(code_address)) |pid| {
+            const pc_result = try self.runPrecompile(pid, calldata, gas_plan.forwarded);
+            charged_child_gas = pc_result.gas_used;
+            call_success = pc_result.success;
+            return_data_local = pc_result.output;
+            return_data_local_owned = true;
+        } else if (self.state_db) |db| {
             const target_code = db.getCode(code_address);
             if (target_code.len > 0) {
                 var child_ctx = self.context;

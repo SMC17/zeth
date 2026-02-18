@@ -225,7 +225,7 @@ test "EVM: CALL executes target code and exposes return data" {
     defer db.deinit();
 
     var callee_addr = types.Address.zero;
-    callee_addr.bytes[19] = 0x01;
+    callee_addr.bytes[19] = 0x0a;
 
     const callee_code = [_]u8{
         0x60, 0x2a, // PUSH1 0x2a
@@ -248,7 +248,7 @@ test "EVM: CALL executes target code and exposes return data" {
         0x60, 0x00, // inSize
         0x60, 0x00, // inOffset
         0x60, 0x00, // value
-        0x60, 0x01, // address
+        0x60, 0x0a, // address
         0x61, 0xff, 0xff, // gas
         0xf1, // CALL
         0x3d, // RETURNDATASIZE
@@ -304,6 +304,176 @@ test "EVM: EXTCODESIZE/EXTCODECOPY/EXTCODEHASH reflect state code bytes" {
     try testing.expectEqualSlices(u8, &expected_hash, &hash_u256.toBytes());
 }
 
+test "EVM: EXTCODEHASH zero for non-existent account and keccak(empty) for empty account" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var empty_addr = types.Address.zero;
+    empty_addr.bytes[19] = 0x01;
+    try db.createAccount(empty_addr); // Exists but has empty code
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const bytecode = [_]u8{
+        0x60, 0x00, // non-existent
+        0x3f, // EXTCODEHASH => 0
+        0x60, 0x01, // empty existing
+        0x3f, // EXTCODEHASH => keccak256("")
+    };
+    _ = try vm.execute(&bytecode, &[_]u8{});
+
+    const empty_hash_u256 = try vm.stack.pop();
+    const missing_hash_u256 = try vm.stack.pop();
+    try testing.expect(missing_hash_u256.isZero());
+
+    var keccak_empty: [32]u8 = undefined;
+    @import("crypto").keccak256("", &keccak_empty);
+    try testing.expectEqualSlices(u8, &keccak_empty, &empty_hash_u256.toBytes());
+}
+
+test "EVM: BLOCKHASH returns zero outside 256-block window" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var context = evm.ExecutionContext.default();
+    context.block_number = 300;
+    var vm = try evm.EVM.initWithContext(allocator, 1_000_000, context);
+    defer vm.deinit();
+
+    const bytecode = [_]u8{
+        0x60, 0x2b, // PUSH1 43 => distance 257
+        0x40, // BLOCKHASH
+    };
+
+    _ = try vm.execute(&bytecode, &[_]u8{});
+    const result = try vm.stack.pop();
+    try testing.expect(result.isZero());
+}
+
+test "EVM: CALL dispatches SHA256 precompile (0x02)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1_000_000);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x20, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x02, // address
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+        0x3d, // RETURNDATASIZE
+    };
+    const precompile_result = try vm.execute(&code, &[_]u8{});
+    defer if (precompile_result.return_data.len > 0) allocator.free(precompile_result.return_data);
+    defer allocator.free(precompile_result.logs);
+
+    const return_size = try vm.stack.pop();
+    const success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), success.limbs[0]);
+    try testing.expectEqual(@as(u64, 32), return_size.limbs[0]);
+
+    var expected: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash("", &expected, .{});
+    try testing.expectEqualSlices(u8, &expected, vm.memory.data.items[0..32]);
+}
+
+test "EVM: CALL dispatches RIPEMD160 precompile (0x03)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1_000_000);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x20, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x03, // address
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+    };
+    const precompile_result = try vm.execute(&code, &[_]u8{});
+    defer if (precompile_result.return_data.len > 0) allocator.free(precompile_result.return_data);
+    defer allocator.free(precompile_result.logs);
+
+    const success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), success.limbs[0]);
+
+    const expected = [_]u8{
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x9c, 0x11, 0x85, 0xa5,
+        0xc5, 0xe9, 0xfc, 0x54, 0x61, 0x28, 0x08, 0x97,
+        0x7e, 0xe8, 0xf5, 0x48, 0xb2, 0x25, 0x8d, 0x31,
+    };
+    try testing.expectEqualSlices(u8, &expected, vm.memory.data.items[0..32]);
+}
+
+test "EVM: CALL dispatches ECRECOVER precompile (0x01)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    const c = @import("crypto");
+
+    const private_key = [_]u8{
+        0x4c, 0x08, 0x83, 0xa6, 0x91, 0x02, 0x93, 0x7d,
+        0x62, 0x33, 0x47, 0x71, 0x2c, 0x8f, 0xa5, 0xf3,
+        0x6c, 0xd7, 0xd8, 0x3f, 0x9f, 0x3a, 0x52, 0x4f,
+        0xc6, 0x6f, 0x66, 0x73, 0xc1, 0x4c, 0xab, 0x5c,
+    };
+    const msg = [_]u8{
+        0x3a, 0x12, 0xb5, 0x10, 0x16, 0xfe, 0x4c, 0xbd,
+        0x6b, 0xa7, 0xfe, 0x3e, 0x2a, 0x7f, 0xe1, 0x58,
+        0x3f, 0x06, 0x66, 0xd2, 0xb5, 0x19, 0x6d, 0x90,
+        0x2f, 0xdc, 0x54, 0x73, 0xa7, 0x0b, 0x2c, 0x0d,
+    };
+    const sig = try c.Secp256k1.sign(msg, private_key);
+    const pk = try c.Secp256k1.PublicKey.fromPrivateKey(private_key);
+    const expected_addr = pk.toAddress();
+
+    var msg_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(&msg, &msg_hash, .{});
+
+    var vm = try evm.EVM.init(allocator, 1_000_000);
+    defer vm.deinit();
+    try vm.memory.data.resize(128);
+    @memset(vm.memory.data.items[0..128], 0);
+    @memcpy(vm.memory.data.items[0..32], msg_hash[0..32]);
+    vm.memory.data.items[63] = sig.v;
+    @memcpy(vm.memory.data.items[64..96], sig.r[0..32]);
+    @memcpy(vm.memory.data.items[96..128], sig.s[0..32]);
+
+    const code = [_]u8{
+        0x60, 0x20, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x80, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x01, // address
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+        0x3d, // RETURNDATASIZE
+    };
+    const precompile_result = try vm.execute(&code, &[_]u8{});
+    defer if (precompile_result.return_data.len > 0) allocator.free(precompile_result.return_data);
+    defer allocator.free(precompile_result.logs);
+
+    const return_size = try vm.stack.pop();
+    const success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), success.limbs[0]);
+    try testing.expectEqual(@as(u64, 32), return_size.limbs[0]);
+    try testing.expectEqualSlices(u8, &expected_addr, vm.memory.data.items[12..32]);
+}
+
 test "EVM: STATICCALL executes with zero call value" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -312,7 +482,7 @@ test "EVM: STATICCALL executes with zero call value" {
     defer db.deinit();
 
     var callee_addr = types.Address.zero;
-    callee_addr.bytes[19] = 0x01;
+    callee_addr.bytes[19] = 0x0a;
 
     const callee_code = [_]u8{
         0x34, // CALLVALUE
@@ -332,7 +502,7 @@ test "EVM: STATICCALL executes with zero call value" {
         0x60, 0x00, // outOffset
         0x60, 0x00, // inSize
         0x60, 0x00, // inOffset
-        0x60, 0x01, // address
+        0x60, 0x0a, // address
         0x61, 0xff, 0xff, // gas
         0xfa, // STATICCALL
     };
@@ -353,7 +523,7 @@ test "EVM: DELEGATECALL preserves caller context" {
     defer db.deinit();
 
     var callee_addr = types.Address.zero;
-    callee_addr.bytes[19] = 0x01;
+    callee_addr.bytes[19] = 0x0a;
 
     const callee_code = [_]u8{
         0x33, // CALLER
@@ -377,7 +547,7 @@ test "EVM: DELEGATECALL preserves caller context" {
         0x60, 0x00, // outOffset
         0x60, 0x00, // inSize
         0x60, 0x00, // inOffset
-        0x60, 0x01, // address
+        0x60, 0x0a, // address
         0x61, 0xff, 0xff, // gas
         0xf4, // DELEGATECALL
     };
@@ -838,7 +1008,7 @@ test "EVM: CALL OOG in child obeys EIP-150 reserve and does not exhaust parent" 
     defer db.deinit();
 
     var target = types.Address.zero;
-    target.bytes[19] = 0x01;
+    target.bytes[19] = 0x0a;
 
     // Infinite loop: JUMPDEST; PUSH1 0; JUMP
     const looping = [_]u8{ 0x5b, 0x60, 0x00, 0x56 };
@@ -853,7 +1023,7 @@ test "EVM: CALL OOG in child obeys EIP-150 reserve and does not exhaust parent" 
         0x60, 0x00, // inSize
         0x60, 0x00, // inOffset
         0x60, 0x00, // value
-        0x60, 0x01, // address
+        0x60, 0x0a, // address
         0x61, 0xff, 0xff, // requested gas (high)
         0xf1, // CALL
     };
