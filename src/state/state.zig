@@ -7,16 +7,23 @@ pub const StateDB = struct {
     allocator: std.mem.Allocator,
     accounts: std.AutoHashMap(types.Address, types.Account),
     storage: std.AutoHashMap(StorageKey, types.U256),
+    code: std.AutoHashMap(types.Address, []u8),
 
     pub fn init(allocator: std.mem.Allocator) StateDB {
         return StateDB{
             .allocator = allocator,
             .accounts = std.AutoHashMap(types.Address, types.Account).init(allocator),
             .storage = std.AutoHashMap(StorageKey, types.U256).init(allocator),
+            .code = std.AutoHashMap(types.Address, []u8).init(allocator),
         };
     }
 
     pub fn deinit(self: *StateDB) void {
+        var code_iter = self.code.iterator();
+        while (code_iter.next()) |entry| {
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.code.deinit();
         self.accounts.deinit();
         self.storage.deinit();
     }
@@ -69,6 +76,29 @@ pub const StateDB = struct {
         if (!self.exists(address)) {
             try self.setAccount(address, types.Account.empty());
         }
+    }
+
+    pub fn getCode(self: *StateDB, address: types.Address) []const u8 {
+        return self.code.get(address) orelse &[_]u8{};
+    }
+
+    pub fn setCode(self: *StateDB, address: types.Address, code_bytes: []const u8) !void {
+        const new_code = try self.allocator.dupe(u8, code_bytes);
+
+        if (self.code.fetchRemove(address)) |old| {
+            self.allocator.free(old.value);
+        }
+        try self.code.put(address, new_code);
+
+        var account = try self.getAccount(address);
+        if (new_code.len == 0) {
+            account.code_hash = types.Hash.zero;
+        } else {
+            var hash: [32]u8 = undefined;
+            crypto.keccak256(new_code, &hash);
+            account.code_hash = types.Hash{ .bytes = hash };
+        }
+        try self.setAccount(address, account);
     }
 };
 
@@ -234,6 +264,27 @@ test "StateDB storage operations" {
 
     const retrieved = try state.getStorage(addr, key);
     try testing.expectEqual(@as(u64, 1337), retrieved.limbs[0]);
+}
+
+test "StateDB code operations" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var state = StateDB.init(allocator);
+    defer state.deinit();
+
+    var addr = types.Address.zero;
+    addr.bytes[19] = 0x01;
+
+    const code_bytes = [_]u8{ 0x60, 0x2a, 0x00 };
+    try state.setCode(addr, &code_bytes);
+
+    const retrieved = state.getCode(addr);
+    try testing.expectEqual(@as(usize, 3), retrieved.len);
+    try testing.expectEqual(@as(u8, 0x60), retrieved[0]);
+
+    const account = try state.getAccount(addr);
+    try testing.expect(!account.code_hash.eql(types.Hash.zero));
 }
 
 test "Trie insert and get" {

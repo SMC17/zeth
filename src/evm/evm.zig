@@ -54,6 +54,8 @@ pub const EVM = struct {
     warm_accounts: std.AutoHashMap(types.Address, void),
     // Return data from last CALL/CREATE/DELEGATECALL (for RETURNDATACOPY)
     return_data: []const u8 = &[_]u8{},
+    return_data_owned: ?[]u8 = null,
+    halted: bool = false,
     // State database for external account lookups (optional)
     state_db: ?*state.StateDB = null,
 
@@ -106,6 +108,7 @@ pub const EVM = struct {
     }
 
     pub fn deinit(self: *EVM) void {
+        self.clearReturnData();
         self.stack.deinit(self.allocator);
         self.memory.deinit(self.allocator);
         self.storage.deinit();
@@ -216,12 +219,37 @@ pub const EVM = struct {
         return 2600; // cold account access cost
     }
 
+    fn clearReturnData(self: *EVM) void {
+        if (self.return_data_owned) |buf| {
+            self.allocator.free(buf);
+            self.return_data_owned = null;
+        }
+        self.return_data = &[_]u8{};
+    }
+
+    fn setReturnData(self: *EVM, data: []const u8) !void {
+        self.clearReturnData();
+        const dup = try self.allocator.dupe(u8, data);
+        self.return_data_owned = dup;
+        self.return_data = dup;
+    }
+
+    fn u256ToAddress(value: types.U256) types.Address {
+        var address_bytes: [20]u8 = undefined;
+        const value_bytes = value.toBytes();
+        @memcpy(&address_bytes, value_bytes[12..32]);
+        return types.Address{ .bytes = address_bytes };
+    }
+
     pub fn execute(self: *EVM, code: []const u8, data: []const u8) !ExecutionResult {
         self.context.code = code;
         self.context.calldata = data;
+        self.halted = false;
+        self.clearReturnData();
         var pc: usize = 0;
 
         while (pc < code.len) {
+            if (self.halted) break;
             if (self.gas_used >= self.gas_limit) {
                 return error.OutOfGas;
             }
@@ -234,7 +262,7 @@ pub const EVM = struct {
                     return ExecutionResult{
                         .success = false,
                         .gas_used = self.gas_used,
-                        .return_data = &[_]u8{},
+                        .return_data = if (self.return_data.len == 0) &[_]u8{} else try self.allocator.dupe(u8, self.return_data),
                         .logs = &[_]Log{},
                     };
                 }
@@ -245,14 +273,17 @@ pub const EVM = struct {
         return ExecutionResult{
             .success = true,
             .gas_used = self.gas_used,
-            .return_data = &[_]u8{},
+            .return_data = if (self.return_data.len == 0) &[_]u8{} else try self.allocator.dupe(u8, self.return_data),
             .logs = try self.logs.toOwnedSlice(),
         };
     }
 
     fn executeOpcode(self: *EVM, opcode: Opcode, code: []const u8, pc: *usize) !void {
         switch (opcode) {
-            .STOP => return,
+            .STOP => {
+                self.halted = true;
+                return;
+            },
 
             // Arithmetic
             .ADD => try self.opAdd(),
@@ -1076,19 +1107,12 @@ pub const EVM = struct {
     fn opExtCodeSize(self: *EVM) !void {
         // EXTCODESIZE(address): Get size of code at address
         const address_u256 = try self.stack.pop();
-
-        // Extract address from U256
-        var address_bytes: [20]u8 = undefined;
-        const value_bytes = address_u256.toBytes();
-        @memcpy(&address_bytes, value_bytes[12..32]);
-        const address = types.Address{ .bytes = address_bytes };
+        const address = u256ToAddress(address_u256);
 
         // Look up code size from state if available
         if (self.state_db) |db| {
-            _ = db.getAccount(address) catch types.Account.empty();
-            // No code bytes are tracked yet in StateDB account model.
-            // Keep behavior deterministic until code persistence is added.
-            try self.stack.push(self.allocator, types.U256.zero());
+            const code = db.getCode(address);
+            try self.stack.push(self.allocator, types.U256.fromU64(code.len));
         } else {
             // No state database - return 0
             try self.stack.push(self.allocator, types.U256.zero());
@@ -1104,13 +1128,9 @@ pub const EVM = struct {
         const code_offset_u256 = try self.stack.pop();
         const length_u256 = try self.stack.pop();
 
-        // Extract address from U256
-        var address_bytes: [20]u8 = undefined;
-        const value_bytes = address_u256.toBytes();
-        @memcpy(&address_bytes, value_bytes[12..32]);
-        const address = types.Address{ .bytes = address_bytes };
+        const address = u256ToAddress(address_u256);
 
-        _ = code_offset_u256; // TODO: Use code offset when copying actual code
+        const code_offset = code_offset_u256.limbs[0];
         const mem_offset = mem_offset_u256.limbs[0];
         const length = length_u256.limbs[0];
 
@@ -1125,10 +1145,22 @@ pub const EVM = struct {
             try self.memory.data.resize(new_size);
         }
 
-        // StateDB currently does not persist code bytes for accounts.
-        // Until that exists, EXTCODECOPY returns zeroed bytes.
         if (length > 0) {
             @memset(self.memory.data.items[mem_offset..][0..length], 0);
+
+            if (self.state_db) |db| {
+                const code = db.getCode(address);
+                if (code_offset < code.len) {
+                    const src_end = @min(code_offset + length, code.len);
+                    const copy_len = src_end - code_offset;
+                    if (copy_len > 0) {
+                        @memcpy(
+                            self.memory.data.items[mem_offset..][0..copy_len],
+                            code[code_offset..src_end],
+                        );
+                    }
+                }
+            }
         }
 
         // Gas cost: 20 base + account access (EIP-2929) + memory expansion + copy cost
@@ -1140,22 +1172,18 @@ pub const EVM = struct {
     fn opExtCodeHash(self: *EVM) !void {
         // EXTCODEHASH(address): Get hash of code at address (EIP-1052)
         const address_u256 = try self.stack.pop();
-
-        // Extract address from U256
-        var address_bytes: [20]u8 = undefined;
-        const value_bytes = address_u256.toBytes();
-        @memcpy(&address_bytes, value_bytes[12..32]);
-        const address = types.Address{ .bytes = address_bytes };
+        const address = u256ToAddress(address_u256);
 
         // Look up code hash from state if available
         if (self.state_db) |db| {
-            _ = db.getAccount(address) catch types.Account.empty();
-            // StateDB currently stores only code_hash, not code bytes. Returning the
-            // stored code_hash when account exists keeps behavior deterministic.
-            const account = db.getAccount(address) catch types.Account.empty();
-            var hash_as_u256 = types.U256.zero();
-            hash_as_u256 = types.U256.fromBytes(account.code_hash.bytes);
-            try self.stack.push(self.allocator, hash_as_u256);
+            if (!db.exists(address)) {
+                try self.stack.push(self.allocator, types.U256.zero());
+            } else {
+                const code = db.getCode(address);
+                var hash: [32]u8 = undefined;
+                crypto.keccak256(code, &hash);
+                try self.stack.push(self.allocator, types.U256.fromBytes(hash));
+            }
         } else {
             // No state database - return 0
             try self.stack.push(self.allocator, types.U256.zero());
@@ -1313,13 +1341,117 @@ pub const EVM = struct {
 
     // REVERT opcode
     fn opRevert(self: *EVM) !void {
-        _ = try self.stack.pop(); // offset
-        _ = try self.stack.pop(); // length
+        const offset_u256 = try self.stack.pop();
+        const length_u256 = try self.stack.pop();
+        const offset = offset_u256.limbs[0];
+        const length = length_u256.limbs[0];
+
+        const revert_data = try self.readMemoryInput(offset, length);
+        defer self.allocator.free(revert_data);
+        try self.setReturnData(revert_data);
         self.gas_used += 0;
         return error.Revert;
     }
 
-    // CALL opcodes - simplified implementations
+    fn readMemoryInput(self: *EVM, offset: u64, length: u64) ![]u8 {
+        const input = try self.allocator.alloc(u8, length);
+        @memset(input, 0);
+        if (length == 0 or offset >= self.memory.data.items.len) return input;
+
+        const available_end = @min(offset + length, self.memory.data.items.len);
+        const copy_len = available_end - offset;
+        if (copy_len > 0) {
+            @memcpy(input[0..copy_len], self.memory.data.items[offset..available_end]);
+        }
+        return input;
+    }
+
+    fn writeCallReturn(self: *EVM, ret_offset: u64, ret_length: u64, data: []const u8) !u64 {
+        if (ret_length == 0) return 0;
+        const new_size = if (ret_offset < 0xFFFFFFFFFFFFFFFF)
+            @min(ret_offset + ret_length, 0xFFFFFFFF)
+        else
+            ret_offset;
+        if (new_size > self.memory.data.items.len) {
+            try self.memory.data.resize(new_size);
+        }
+        @memset(self.memory.data.items[ret_offset..][0..ret_length], 0);
+        const copy_len = @min(ret_length, data.len);
+        if (copy_len > 0) {
+            @memcpy(self.memory.data.items[ret_offset..][0..copy_len], data[0..copy_len]);
+        }
+        return self.memoryExpansionCost(new_size);
+    }
+
+    fn executeCallFrame(
+        self: *EVM,
+        code_address: types.Address,
+        callee_address: types.Address,
+        caller: types.Address,
+        call_value: types.U256,
+        gas_limit: u64,
+        args_offset: u64,
+        args_length: u64,
+        ret_offset: u64,
+        ret_length: u64,
+    ) anyerror!bool {
+        const calldata = try self.readMemoryInput(args_offset, args_length);
+        defer self.allocator.free(calldata);
+
+        var return_data_local: []const u8 = &[_]u8{};
+        var return_data_local_owned = false;
+        defer if (return_data_local_owned) self.allocator.free(return_data_local);
+
+        var call_success = true;
+        var child_logs: []const Log = &[_]Log{};
+
+        if (self.state_db) |db| {
+            const target_code = db.getCode(code_address);
+            if (target_code.len > 0) {
+                var child_ctx = self.context;
+                child_ctx.caller = caller;
+                child_ctx.origin = self.context.origin;
+                child_ctx.address = callee_address;
+                child_ctx.value = call_value;
+                child_ctx.code = target_code;
+                child_ctx.calldata = calldata;
+
+                var child = try EVM.initWithState(self.allocator, gas_limit, child_ctx, db);
+                defer child.deinit();
+
+                const child_result = child.execute(target_code, calldata) catch {
+                    call_success = false;
+                    try self.setReturnData(&[_]u8{});
+                    try self.stack.push(self.allocator, types.U256.zero());
+                    self.gas_used += 700 + try self.accountAccessCost(code_address);
+                    return false;
+                };
+
+                return_data_local = try self.allocator.dupe(u8, child_result.return_data);
+                return_data_local_owned = true;
+                self.allocator.free(child_result.return_data);
+                child_logs = child_result.logs;
+                call_success = child_result.success;
+            }
+        }
+
+        const mem_cost = try self.writeCallReturn(ret_offset, ret_length, return_data_local);
+        try self.setReturnData(return_data_local);
+        try self.stack.push(self.allocator, if (call_success) types.U256.one() else types.U256.zero());
+        self.gas_used += 700 + mem_cost + try self.accountAccessCost(code_address);
+
+        // Merge child logs only for successful calls.
+        if (call_success and child_logs.len > 0) {
+            for (child_logs) |log| {
+                try self.logs.append(log);
+            }
+        }
+        if (child_logs.len > 0) {
+            self.allocator.free(child_logs);
+        }
+        return call_success;
+    }
+
     fn opCall(self: *EVM) !void {
         const gas = try self.stack.pop();
         const address_u256 = try self.stack.pop();
@@ -1329,80 +1461,85 @@ pub const EVM = struct {
         const ret_offset = try self.stack.pop();
         const ret_length = try self.stack.pop();
 
-        // Simplified CALL - just push success for now
-        // TODO: Actually execute called contract code
-        _ = gas;
-        _ = address_u256;
-        _ = value;
-        _ = args_offset;
-        _ = args_length;
-        _ = ret_offset;
-        _ = ret_length;
-
-        try self.stack.push(self.allocator, types.U256.one()); // Success
-        self.gas_used += 700;
+        const target = u256ToAddress(address_u256);
+        _ = try self.executeCallFrame(
+            target,
+            target,
+            self.context.address,
+            value,
+            gas.limbs[0],
+            args_offset.limbs[0],
+            args_length.limbs[0],
+            ret_offset.limbs[0],
+            ret_length.limbs[0],
+        );
     }
 
     fn opStaticCall(self: *EVM) !void {
         const gas = try self.stack.pop();
-        const address = try self.stack.pop();
+        const address_u256 = try self.stack.pop();
         const args_offset = try self.stack.pop();
         const args_length = try self.stack.pop();
         const ret_offset = try self.stack.pop();
         const ret_length = try self.stack.pop();
 
-        // Simplified STATICCALL
-        _ = gas;
-        _ = address;
-        _ = args_offset;
-        _ = args_length;
-        _ = ret_offset;
-        _ = ret_length;
-
-        try self.stack.push(self.allocator, types.U256.one()); // Success
-        self.gas_used += 700;
+        const target = u256ToAddress(address_u256);
+        _ = try self.executeCallFrame(
+            target,
+            target,
+            self.context.address,
+            types.U256.zero(),
+            gas.limbs[0],
+            args_offset.limbs[0],
+            args_length.limbs[0],
+            ret_offset.limbs[0],
+            ret_length.limbs[0],
+        );
     }
 
     fn opCallCode(self: *EVM) !void {
         const gas = try self.stack.pop();
-        const address = try self.stack.pop();
+        const address_u256 = try self.stack.pop();
         const value = try self.stack.pop();
         const args_offset = try self.stack.pop();
         const args_length = try self.stack.pop();
         const ret_offset = try self.stack.pop();
         const ret_length = try self.stack.pop();
 
-        // Simplified CALLCODE (same execution placeholder as CALL family).
-        _ = gas;
-        _ = address;
-        _ = value;
-        _ = args_offset;
-        _ = args_length;
-        _ = ret_offset;
-        _ = ret_length;
-
-        try self.stack.push(self.allocator, types.U256.one()); // Success
-        self.gas_used += 700;
+        const code_addr = u256ToAddress(address_u256);
+        _ = try self.executeCallFrame(
+            code_addr,
+            self.context.address,
+            self.context.address,
+            value,
+            gas.limbs[0],
+            args_offset.limbs[0],
+            args_length.limbs[0],
+            ret_offset.limbs[0],
+            ret_length.limbs[0],
+        );
     }
 
     fn opDelegateCall(self: *EVM) !void {
         const gas = try self.stack.pop();
-        const address = try self.stack.pop();
+        const address_u256 = try self.stack.pop();
         const args_offset = try self.stack.pop();
         const args_length = try self.stack.pop();
         const ret_offset = try self.stack.pop();
         const ret_length = try self.stack.pop();
 
-        // Simplified DELEGATECALL
-        _ = gas;
-        _ = address;
-        _ = args_offset;
-        _ = args_length;
-        _ = ret_offset;
-        _ = ret_length;
-
-        try self.stack.push(self.allocator, types.U256.one()); // Success
-        self.gas_used += 700;
+        const target = u256ToAddress(address_u256);
+        _ = try self.executeCallFrame(
+            target,
+            self.context.address,
+            self.context.caller,
+            self.context.value,
+            gas.limbs[0],
+            args_offset.limbs[0],
+            args_length.limbs[0],
+            ret_offset.limbs[0],
+            ret_length.limbs[0],
+        );
     }
 
     // CREATE opcodes
@@ -1610,11 +1747,10 @@ pub const EVM = struct {
         const offset = offset_u256.limbs[0];
         const length = length_u256.limbs[0];
 
-        // Extract return data from memory
-        // In real implementation, this would be used to construct ExecutionResult
-        // For now, we just mark it for future use
-        _ = offset;
-        _ = length;
+        const returned = try self.readMemoryInput(offset, length);
+        defer self.allocator.free(returned);
+        try self.setReturnData(returned);
+        self.halted = true;
         self.gas_used += 0;
     }
 

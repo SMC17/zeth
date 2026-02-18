@@ -289,6 +289,7 @@ pub fn build(b: *std.Build) void {
     comprehensive_test_mod.addImport("evm", evm_mod);
     comprehensive_test_mod.addImport("types", types_mod);
     comprehensive_test_mod.addImport("crypto", crypto_mod);
+    comprehensive_test_mod.addImport("state", state_mod);
 
     const comprehensive_tests = b.addTest(.{
         .root_module = comprehensive_test_mod,

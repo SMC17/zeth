@@ -1,6 +1,7 @@
 const std = @import("std");
 const evm = @import("evm");
 const types = @import("types");
+const state = @import("state");
 
 // Comprehensive EVM Test Suite
 // Tests all major opcode families with real bytecode
@@ -171,6 +172,175 @@ test "EVM: BLOCKHASH does not underflow for low block numbers" {
     _ = try vm.execute(&bytecode, &[_]u8{});
     const result = try vm.stack.pop();
     try testing.expect(result.isZero());
+}
+
+test "EVM: CALL executes target code and exposes return data" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    const callee_addr = types.Address.zero;
+
+    const callee_code = [_]u8{
+        0x60, 0x2a, // PUSH1 0x2a
+        0x60, 0x00, // PUSH1 0
+        0x52, // MSTORE
+        0x60, 0x20, // PUSH1 32 (length)
+        0x60, 0x00, // PUSH1 0 (offset)
+        0xf3, // RETURN
+    };
+    try db.setCode(callee_addr, &callee_code);
+
+    var context = evm.ExecutionContext.default();
+    context.address.bytes[19] = 0xaa;
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, context, &db);
+    defer vm.deinit();
+
+    const caller_code = [_]u8{
+        0x60, 0x20, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x00, // address
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+        0x3d, // RETURNDATASIZE
+    };
+
+    const call_result = try vm.execute(&caller_code, &[_]u8{});
+    defer if (call_result.return_data.len > 0) allocator.free(call_result.return_data);
+    defer allocator.free(call_result.logs);
+    const return_data_size = try vm.stack.pop();
+    const call_success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 32), return_data_size.limbs[0]);
+    try testing.expectEqual(@as(u64, 1), call_success.limbs[0]);
+}
+
+test "EVM: EXTCODESIZE/EXTCODECOPY/EXTCODEHASH reflect state code bytes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    const target = types.Address.zero;
+    const code = [_]u8{ 0x60, 0x2a, 0x00 };
+    try db.setCode(target, &code);
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const bytecode = [_]u8{
+        0x60, 0x00, // PUSH1 addr
+        0x3b, // EXTCODESIZE -> 3
+        0x60, 0x03, // PUSH1 len
+        0x60, 0x00, // PUSH1 codeOffset
+        0x60, 0x00, // PUSH1 memOffset
+        0x60, 0x00, // PUSH1 addr
+        0x3c, // EXTCODECOPY
+        0x60, 0x00, // PUSH1 addr
+        0x3f, // EXTCODEHASH
+    };
+
+    _ = try vm.execute(&bytecode, &[_]u8{});
+
+    const hash_u256 = try vm.stack.pop();
+    const size_u256 = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 3), size_u256.limbs[0]);
+
+    try testing.expectEqual(@as(u8, 0x60), vm.memory.data.items[0]);
+    try testing.expectEqual(@as(u8, 0x2a), vm.memory.data.items[1]);
+    try testing.expectEqual(@as(u8, 0x00), vm.memory.data.items[2]);
+
+    var expected_hash: [32]u8 = undefined;
+    @import("crypto").keccak256(&code, &expected_hash);
+    try testing.expectEqualSlices(u8, &expected_hash, &hash_u256.toBytes());
+}
+
+test "EVM: STATICCALL executes with zero call value" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    const callee_addr = types.Address.zero;
+
+    const callee_code = [_]u8{
+        0x34, // CALLVALUE
+        0x60, 0x00, // PUSH1 0
+        0x52, // MSTORE
+        0x60, 0x20, // PUSH1 32
+        0x60, 0x00, // PUSH1 0
+        0xf3, // RETURN
+    };
+    try db.setCode(callee_addr, &callee_code);
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x20, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // address
+        0x61, 0xff, 0xff, // gas
+        0xfa, // STATICCALL
+    };
+
+    const static_result = try vm.execute(&code, &[_]u8{});
+    defer if (static_result.return_data.len > 0) allocator.free(static_result.return_data);
+    defer allocator.free(static_result.logs);
+    const success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), success.limbs[0]);
+    try testing.expectEqual(@as(u8, 0x00), vm.memory.data.items[31]);
+}
+
+test "EVM: DELEGATECALL preserves caller context" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    const callee_addr = types.Address.zero;
+
+    const callee_code = [_]u8{
+        0x33, // CALLER
+        0x60, 0x00, // PUSH1 0
+        0x52, // MSTORE
+        0x60, 0x20, // PUSH1 32
+        0x60, 0x00, // PUSH1 0
+        0xf3, // RETURN
+    };
+    try db.setCode(callee_addr, &callee_code);
+
+    var context = evm.ExecutionContext.default();
+    context.address.bytes[19] = 0xaa;
+    context.caller.bytes[19] = 0xbb;
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, context, &db);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x20, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // address
+        0x61, 0xff, 0xff, // gas
+        0xf4, // DELEGATECALL
+    };
+
+    const delegate_result = try vm.execute(&code, &[_]u8{});
+    defer if (delegate_result.return_data.len > 0) allocator.free(delegate_result.return_data);
+    defer allocator.free(delegate_result.logs);
+    const success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), success.limbs[0]);
 }
 
 test "EVM: Stack operations (DUP and SWAP)" {
