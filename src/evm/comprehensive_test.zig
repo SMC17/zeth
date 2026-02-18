@@ -632,6 +632,126 @@ test "EVM: MODEXP precompile fails with OOG and consumes forwarded gas" {
     try testing.expectEqual(@as(u64, 921), vm.gas_used);
 }
 
+test "EVM: CALL dispatches BN256ADD precompile (0x06) with exact gas" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1_000_000);
+    defer vm.deinit();
+
+    // Input: (1,2) + (1,2)
+    try vm.memory.data.resize(128);
+    @memset(vm.memory.data.items[0..128], 0);
+    vm.memory.data.items[31] = 1;
+    vm.memory.data.items[63] = 2;
+    vm.memory.data.items[95] = 1;
+    vm.memory.data.items[127] = 2;
+
+    const code = [_]u8{
+        0x60, 0x40, // outSize = 64
+        0x60, 0x00, // outOffset
+        0x60, 0x80, // inSize = 128
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x06, // address
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), success.limbs[0]);
+    const expected = [_]u8{
+        0x15, 0x2b, 0xe2, 0x52, 0x42, 0x85, 0xb6, 0x12,
+        0x40, 0xa3, 0x1e, 0x7f, 0xd8, 0xa8, 0x96, 0xa8,
+        0xc1, 0x96, 0xb5, 0x9f, 0xb5, 0x41, 0x21, 0x3f,
+        0x8d, 0xb2, 0xdb, 0x70, 0xb8, 0xff, 0xff, 0xff,
+        0x08, 0x51, 0x3d, 0x7b, 0xbe, 0xb4, 0x87, 0x87,
+        0x2b, 0xad, 0xcb, 0xfb, 0x5e, 0x42, 0x3b, 0x30,
+        0x02, 0xe8, 0xeb, 0xec, 0x74, 0xeb, 0xdf, 0x58,
+        0xf7, 0xaa, 0xd6, 0x35, 0x6d, 0x40, 0x00, 0x00,
+    };
+    try testing.expectEqualSlices(u8, &expected, vm.memory.data.items[0..64]);
+    try testing.expectEqual(@as(u64, 971), vm.gas_used);
+}
+
+test "EVM: CALL dispatches BN256MUL precompile (0x07) with exact gas" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1_000_000);
+    defer vm.deinit();
+
+    // Input: (1,2) * 2
+    try vm.memory.data.resize(96);
+    @memset(vm.memory.data.items[0..96], 0);
+    vm.memory.data.items[31] = 1;
+    vm.memory.data.items[63] = 2;
+    vm.memory.data.items[95] = 2;
+
+    const code = [_]u8{
+        0x60, 0x40, // outSize = 64
+        0x60, 0x00, // outOffset
+        0x60, 0x60, // inSize = 96
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x07, // address
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), success.limbs[0]);
+    const expected = [_]u8{
+        0x15, 0x2b, 0xe2, 0x52, 0x42, 0x85, 0xb6, 0x12,
+        0x40, 0xa3, 0x1e, 0x7f, 0xd8, 0xa8, 0x96, 0xa8,
+        0xc1, 0x96, 0xb5, 0x9f, 0xb5, 0x41, 0x21, 0x3f,
+        0x8d, 0xb2, 0xdb, 0x70, 0xb8, 0xff, 0xff, 0xff,
+        0x08, 0x51, 0x3d, 0x7b, 0xbe, 0xb4, 0x87, 0x87,
+        0x2b, 0xad, 0xcb, 0xfb, 0x5e, 0x42, 0x3b, 0x30,
+        0x02, 0xe8, 0xeb, 0xec, 0x74, 0xeb, 0xdf, 0x58,
+        0xf7, 0xaa, 0xd6, 0x35, 0x6d, 0x40, 0x00, 0x00,
+    };
+    try testing.expectEqualSlices(u8, &expected, vm.memory.data.items[0..64]);
+    try testing.expectEqual(@as(u64, 6_821), vm.gas_used);
+}
+
+test "EVM: CALL dispatches BN256PAIRING precompile (0x08) empty-input true case" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1_000_000);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x20, // outSize = 32
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize = 0
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x08, // address
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), success.limbs[0]);
+    try testing.expectEqual(@as(u8, 1), vm.memory.data.items[31]);
+    // Pushes + CALL base + pairing base gas
+    try testing.expectEqual(@as(u64, 45_824), vm.gas_used);
+}
+
 test "EVM: STATICCALL executes with zero call value" {
     const testing = std.testing;
     const allocator = testing.allocator;

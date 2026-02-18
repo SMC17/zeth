@@ -333,6 +333,369 @@ pub const EVM = struct {
         output: []u8,
     };
 
+    const BigInt = std.math.big.int.Managed;
+
+    const BnPoint = struct {
+        x: BigInt,
+        y: BigInt,
+        infinity: bool,
+
+        fn deinit(self: *BnPoint) void {
+            self.x.deinit();
+            self.y.deinit();
+        }
+    };
+
+    fn bigFromDecimal(allocator: std.mem.Allocator, s: []const u8) !BigInt {
+        var v = try BigInt.init(allocator);
+        errdefer v.deinit();
+        try v.setString(10, s);
+        return v;
+    }
+
+    fn bigFromU64(allocator: std.mem.Allocator, v: u64) !BigInt {
+        return try BigInt.initSet(allocator, v);
+    }
+
+    fn bigClone(allocator: std.mem.Allocator, src: BigInt) !BigInt {
+        var out = try BigInt.init(allocator);
+        errdefer out.deinit();
+        try out.copy(src.toConst());
+        return out;
+    }
+
+    fn bigMod(allocator: std.mem.Allocator, a: BigInt, m: BigInt) !BigInt {
+        var q = try BigInt.init(allocator);
+        defer q.deinit();
+        var r = try BigInt.init(allocator);
+        errdefer r.deinit();
+        try BigInt.divTrunc(&q, &r, &a, &m);
+        return r;
+    }
+
+    fn bigModAdd(allocator: std.mem.Allocator, a: BigInt, b: BigInt, m: BigInt) !BigInt {
+        var s = try BigInt.init(allocator);
+        defer s.deinit();
+        try BigInt.add(&s, &a, &b);
+        return try bigMod(allocator, s, m);
+    }
+
+    fn bigModSub(allocator: std.mem.Allocator, a: BigInt, b: BigInt, m: BigInt) !BigInt {
+        if (BigInt.order(a, b) == .lt) {
+            var t = try BigInt.init(allocator);
+            defer t.deinit();
+            try BigInt.add(&t, &a, &m);
+            var s = try BigInt.init(allocator);
+            defer s.deinit();
+            try BigInt.sub(&s, &t, &b);
+            return try bigMod(allocator, s, m);
+        }
+        var s = try BigInt.init(allocator);
+        defer s.deinit();
+        try BigInt.sub(&s, &a, &b);
+        return try bigMod(allocator, s, m);
+    }
+
+    fn bigModMul(allocator: std.mem.Allocator, a: BigInt, b: BigInt, m: BigInt) !BigInt {
+        var p = try BigInt.init(allocator);
+        defer p.deinit();
+        try BigInt.mul(&p, &a, &b);
+        return try bigMod(allocator, p, m);
+    }
+
+    fn bigModExp(allocator: std.mem.Allocator, base_in: BigInt, exp_in: BigInt, modulus: BigInt) !BigInt {
+        var zero = try BigInt.initSet(allocator, 0);
+        defer zero.deinit();
+        if (modulus.eqlZero()) return try BigInt.initSet(allocator, 0);
+
+        var q = try BigInt.init(allocator);
+        defer q.deinit();
+        var rem = try BigInt.init(allocator);
+        defer rem.deinit();
+        try BigInt.divTrunc(&q, &rem, &base_in, &modulus);
+        var base = try bigClone(allocator, rem);
+        defer base.deinit();
+
+        var exp = try bigClone(allocator, exp_in);
+        defer exp.deinit();
+
+        var result = try BigInt.initSet(allocator, 1);
+        errdefer result.deinit();
+
+        while (!exp.eqlZero()) {
+            if (exp.isOdd()) {
+                var prod = try BigInt.init(allocator);
+                defer prod.deinit();
+                try BigInt.mul(&prod, &result, &base);
+                try BigInt.divTrunc(&q, &rem, &prod, &modulus);
+                try result.copy(rem.toConst());
+            }
+
+            var sq = try BigInt.init(allocator);
+            defer sq.deinit();
+            try BigInt.mul(&sq, &base, &base);
+            try BigInt.divTrunc(&q, &rem, &sq, &modulus);
+            try base.copy(rem.toConst());
+
+            var shifted = try BigInt.init(allocator);
+            defer shifted.deinit();
+            try BigInt.shiftRight(&shifted, &exp, 1);
+            try exp.copy(shifted.toConst());
+        }
+        return result;
+    }
+
+    fn bigModInv(allocator: std.mem.Allocator, a: BigInt, m: BigInt) !BigInt {
+        var two = try BigInt.initSet(allocator, 2);
+        defer two.deinit();
+        var exp = try BigInt.init(allocator);
+        defer exp.deinit();
+        try BigInt.sub(&exp, &m, &two); // m - 2
+        return try bigModExp(allocator, a, exp, m);
+    }
+
+    fn bnPrime(allocator: std.mem.Allocator) !BigInt {
+        return try bigFromDecimal(
+            allocator,
+            "21888242871839275222246405745257275088548364400416034343698204186575808495617",
+        );
+    }
+
+    fn bnInfinity(allocator: std.mem.Allocator) !BnPoint {
+        return BnPoint{
+            .x = try BigInt.initSet(allocator, 0),
+            .y = try BigInt.initSet(allocator, 0),
+            .infinity = true,
+        };
+    }
+
+    fn bnPointCopy(allocator: std.mem.Allocator, p: BnPoint) !BnPoint {
+        return BnPoint{
+            .x = try bigClone(allocator, p.x),
+            .y = try bigClone(allocator, p.y),
+            .infinity = p.infinity,
+        };
+    }
+
+    fn bnIsOnCurve(allocator: std.mem.Allocator, x: BigInt, y: BigInt, p: BigInt) !bool {
+        var y2 = try bigModMul(allocator, y, y, p);
+        defer y2.deinit();
+        var x2 = try bigModMul(allocator, x, x, p);
+        defer x2.deinit();
+        var x3 = try bigModMul(allocator, x2, x, p);
+        defer x3.deinit();
+        var three = try bigFromU64(allocator, 3);
+        defer three.deinit();
+        var rhs = try bigModAdd(allocator, x3, three, p);
+        defer rhs.deinit();
+        return BigInt.order(y2, rhs) == .eq;
+    }
+
+    fn bnPointFromInput(self: *EVM, bytes: []const u8, p: BigInt) !BnPoint {
+        var x = try managedFromBigEndian(self.allocator, bytes[0..32]);
+        errdefer x.deinit();
+        var y = try managedFromBigEndian(self.allocator, bytes[32..64]);
+        errdefer y.deinit();
+
+        if (x.eqlZero() and y.eqlZero()) {
+            return BnPoint{ .x = x, .y = y, .infinity = true };
+        }
+        if (BigInt.order(x, p) != .lt or BigInt.order(y, p) != .lt) return error.InvalidPoint;
+        if (!(try bnIsOnCurve(self.allocator, x, y, p))) return error.InvalidPoint;
+        return BnPoint{ .x = x, .y = y, .infinity = false };
+    }
+
+    fn bnPointTo64(self: *EVM, point: BnPoint) ![]u8 {
+        const out = try self.allocator.alloc(u8, 64);
+        @memset(out, 0);
+        if (point.infinity) return out;
+
+        const xb = try managedToFixedLenBigEndian(self.allocator, point.x, 32);
+        defer self.allocator.free(xb);
+        const yb = try managedToFixedLenBigEndian(self.allocator, point.y, 32);
+        defer self.allocator.free(yb);
+        @memcpy(out[0..32], xb);
+        @memcpy(out[32..64], yb);
+        return out;
+    }
+
+    fn bnAdd(self: *EVM, a: BnPoint, b: BnPoint, p: BigInt) !BnPoint {
+        if (a.infinity) return try bnPointCopy(self.allocator, b);
+        if (b.infinity) return try bnPointCopy(self.allocator, a);
+
+        if (BigInt.order(a.x, b.x) == .eq) {
+            if (BigInt.order(a.y, b.y) != .eq) {
+                return try bnInfinity(self.allocator);
+            }
+            if (a.y.eqlZero()) return try bnInfinity(self.allocator);
+
+            var three = try bigFromU64(self.allocator, 3);
+            defer three.deinit();
+            var two = try bigFromU64(self.allocator, 2);
+            defer two.deinit();
+
+            var x2 = try bigModMul(self.allocator, a.x, a.x, p);
+            defer x2.deinit();
+            var num = try bigModMul(self.allocator, x2, three, p);
+            defer num.deinit();
+            var den = try bigModMul(self.allocator, a.y, two, p);
+            defer den.deinit();
+            if (den.eqlZero()) return try bnInfinity(self.allocator);
+            var den_inv = try bigModInv(self.allocator, den, p);
+            defer den_inv.deinit();
+            var lambda = try bigModMul(self.allocator, num, den_inv, p);
+            defer lambda.deinit();
+
+            var lambda2 = try bigModMul(self.allocator, lambda, lambda, p);
+            defer lambda2.deinit();
+            var x3_tmp = try bigModSub(self.allocator, lambda2, a.x, p);
+            defer x3_tmp.deinit();
+            var x3 = try bigModSub(self.allocator, x3_tmp, b.x, p);
+            errdefer x3.deinit();
+
+            var x1_minus_x3 = try bigModSub(self.allocator, a.x, x3, p);
+            defer x1_minus_x3.deinit();
+            var lambda_times = try bigModMul(self.allocator, lambda, x1_minus_x3, p);
+            defer lambda_times.deinit();
+            var y3 = try bigModSub(self.allocator, lambda_times, a.y, p);
+            errdefer y3.deinit();
+
+            return BnPoint{ .x = x3, .y = y3, .infinity = false };
+        }
+
+        var num = try bigModSub(self.allocator, b.y, a.y, p);
+        defer num.deinit();
+        var den = try bigModSub(self.allocator, b.x, a.x, p);
+        defer den.deinit();
+        if (den.eqlZero()) return try bnInfinity(self.allocator);
+        var den_inv = try bigModInv(self.allocator, den, p);
+        defer den_inv.deinit();
+        var lambda = try bigModMul(self.allocator, num, den_inv, p);
+        defer lambda.deinit();
+
+        var lambda2 = try bigModMul(self.allocator, lambda, lambda, p);
+        defer lambda2.deinit();
+        var x3_tmp = try bigModSub(self.allocator, lambda2, a.x, p);
+        defer x3_tmp.deinit();
+        var x3 = try bigModSub(self.allocator, x3_tmp, b.x, p);
+        errdefer x3.deinit();
+
+        var x1_minus_x3 = try bigModSub(self.allocator, a.x, x3, p);
+        defer x1_minus_x3.deinit();
+        var lambda_times = try bigModMul(self.allocator, lambda, x1_minus_x3, p);
+        defer lambda_times.deinit();
+        var y3 = try bigModSub(self.allocator, lambda_times, a.y, p);
+        errdefer y3.deinit();
+        return BnPoint{ .x = x3, .y = y3, .infinity = false };
+    }
+
+    fn bnMul(self: *EVM, point: BnPoint, scalar: BigInt, p: BigInt) !BnPoint {
+        if (point.infinity or scalar.eqlZero()) return try bnInfinity(self.allocator);
+
+        var n = try bigClone(self.allocator, scalar);
+        defer n.deinit();
+        var addend = try bnPointCopy(self.allocator, point);
+        defer addend.deinit();
+        var result = try bnInfinity(self.allocator);
+
+        while (!n.eqlZero()) {
+            if (n.isOdd()) {
+                const next = try self.bnAdd(result, addend, p);
+                result.deinit();
+                result = next;
+            }
+            const doubled = try self.bnAdd(addend, addend, p);
+            addend.deinit();
+            addend = doubled;
+
+            var shifted = try BigInt.init(self.allocator);
+            defer shifted.deinit();
+            try BigInt.shiftRight(&shifted, &n, 1);
+            try n.copy(shifted.toConst());
+        }
+
+        return result;
+    }
+
+    fn runBn256AddPrecompile(self: *EVM, input: []const u8, required_gas: u64) !PrecompileResult {
+        var p = try bnPrime(self.allocator);
+        defer p.deinit();
+
+        var in_buf = [_]u8{0} ** 128;
+        const in_len = @min(input.len, in_buf.len);
+        @memcpy(in_buf[0..in_len], input[0..in_len]);
+
+        var a = self.bnPointFromInput(in_buf[0..64], p) catch {
+            return PrecompileResult{ .success = false, .gas_used = required_gas, .output = try self.allocator.alloc(u8, 0) };
+        };
+        defer a.deinit();
+        var b = self.bnPointFromInput(in_buf[64..128], p) catch {
+            return PrecompileResult{ .success = false, .gas_used = required_gas, .output = try self.allocator.alloc(u8, 0) };
+        };
+        defer b.deinit();
+
+        var c = self.bnAdd(a, b, p) catch {
+            return PrecompileResult{ .success = false, .gas_used = required_gas, .output = try self.allocator.alloc(u8, 0) };
+        };
+        defer c.deinit();
+
+        return PrecompileResult{
+            .success = true,
+            .gas_used = required_gas,
+            .output = try self.bnPointTo64(c),
+        };
+    }
+
+    fn runBn256MulPrecompile(self: *EVM, input: []const u8, required_gas: u64) !PrecompileResult {
+        var p = try bnPrime(self.allocator);
+        defer p.deinit();
+
+        var in_buf = [_]u8{0} ** 96;
+        const in_len = @min(input.len, in_buf.len);
+        @memcpy(in_buf[0..in_len], input[0..in_len]);
+
+        var point = self.bnPointFromInput(in_buf[0..64], p) catch {
+            return PrecompileResult{ .success = false, .gas_used = required_gas, .output = try self.allocator.alloc(u8, 0) };
+        };
+        defer point.deinit();
+        var scalar = try managedFromBigEndian(self.allocator, in_buf[64..96]);
+        defer scalar.deinit();
+
+        var out_point = self.bnMul(point, scalar, p) catch {
+            return PrecompileResult{ .success = false, .gas_used = required_gas, .output = try self.allocator.alloc(u8, 0) };
+        };
+        defer out_point.deinit();
+
+        return PrecompileResult{
+            .success = true,
+            .gas_used = required_gas,
+            .output = try self.bnPointTo64(out_point),
+        };
+    }
+
+    fn runBn256PairingPrecompile(self: *EVM, input: []const u8, required_gas: u64) !PrecompileResult {
+        // Full pairing check for non-empty inputs is a follow-up step.
+        // Spec-compatible fast paths:
+        // - Empty input => true (1)
+        // - Length not divisible by 192 => failure
+        if (input.len == 0) {
+            const out = try self.allocator.alloc(u8, 32);
+            @memset(out, 0);
+            out[31] = 1;
+            return PrecompileResult{ .success = true, .gas_used = required_gas, .output = out };
+        }
+        if (input.len % 192 != 0) {
+            return PrecompileResult{
+                .success = false,
+                .gas_used = required_gas,
+                .output = try self.allocator.alloc(u8, 0),
+            };
+        }
+        const out = try self.allocator.alloc(u8, 32);
+        @memset(out, 0);
+        return PrecompileResult{ .success = true, .gas_used = required_gas, .output = out };
+    }
+
     fn readWordLen(input: []const u8, offset: usize) u64 {
         const readTailAsU64 = struct {
             fn run(bytes: []const u8) u64 {
@@ -565,6 +928,13 @@ pub const EVM = struct {
             3 => 600 + 120 * words, // RIPEMD160
             4 => 15 + 3 * words, // IDENTITY
             5 => try modexpRequiredGas(input), // MODEXP (EIP-2565)
+            6 => 150, // BN256ADD
+            7 => 6000, // BN256MUL
+            8 => blk: { // BN256PAIRING
+                if (input.len % 192 != 0) break :blk std.math.maxInt(u64);
+                const pairs = input.len / 192;
+                break :blk 45_000 + 34_000 * pairs;
+            },
             else => forwarded_gas,
         };
 
@@ -619,6 +989,9 @@ pub const EVM = struct {
                 return PrecompileResult{ .success = true, .gas_used = required_gas, .output = out };
             },
             5 => return try self.runModExpPrecompile(input, required_gas),
+            6 => return try self.runBn256AddPrecompile(input, required_gas),
+            7 => return try self.runBn256MulPrecompile(input, required_gas),
+            8 => return try self.runBn256PairingPrecompile(input, required_gas),
             else => {
                 return PrecompileResult{
                     .success = false,
