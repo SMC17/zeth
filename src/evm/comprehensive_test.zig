@@ -845,6 +845,94 @@ test "EVM: BN256PAIRING (0x08) invalid G1 coordinate fails" {
     try testing.expectEqual(@as(u64, 79_821), vm.gas_used);
 }
 
+test "EVM: BN256PAIRING (0x08) canonical generator pair returns false" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 3_000_000);
+    defer vm.deinit();
+
+    try vm.memory.data.resize(192);
+    @memset(vm.memory.data.items[0..192], 0);
+
+    // G1 generator (1, 2)
+    vm.memory.data.items[31] = 0x01;
+    vm.memory.data.items[63] = 0x02;
+
+    // G2 generator encoded as (x_im, x_re, y_im, y_re)
+    _ = try std.fmt.hexToBytes(vm.memory.data.items[64..96], "198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2");
+    _ = try std.fmt.hexToBytes(vm.memory.data.items[96..128], "1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed");
+    _ = try std.fmt.hexToBytes(vm.memory.data.items[128..160], "090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b");
+    _ = try std.fmt.hexToBytes(vm.memory.data.items[160..192], "12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa");
+
+    const code = [_]u8{
+        0x60, 0x20, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0xc0, // inSize = 192
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x08, // address
+        0x62, 0x1f, 0xff, 0xff, // gas
+        0xf1, // CALL
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), success.limbs[0]);
+    try testing.expectEqual(@as(u8, 0), vm.memory.data.items[31]);
+    try testing.expectEqual(@as(u64, 79_821), vm.gas_used);
+}
+
+test "EVM: BN256PAIRING (0x08) canonical inverse pair product returns true" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 4_000_000);
+    defer vm.deinit();
+
+    try vm.memory.data.resize(384);
+    @memset(vm.memory.data.items[0..384], 0);
+
+    // Pair 1: (G1, G2)
+    vm.memory.data.items[31] = 0x01;
+    vm.memory.data.items[63] = 0x02;
+    _ = try std.fmt.hexToBytes(vm.memory.data.items[64..96], "198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2");
+    _ = try std.fmt.hexToBytes(vm.memory.data.items[96..128], "1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed");
+    _ = try std.fmt.hexToBytes(vm.memory.data.items[128..160], "090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b");
+    _ = try std.fmt.hexToBytes(vm.memory.data.items[160..192], "12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa");
+
+    // Pair 2: (G1, -G2)
+    vm.memory.data.items[223] = 0x01;
+    vm.memory.data.items[255] = 0x02;
+    _ = try std.fmt.hexToBytes(vm.memory.data.items[256..288], "198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2");
+    _ = try std.fmt.hexToBytes(vm.memory.data.items[288..320], "1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed");
+    _ = try std.fmt.hexToBytes(vm.memory.data.items[320..352], "275dc4a288d1afb3cbb1ac09187524c7db36395df7be3b99e673b13a075a65ec");
+    _ = try std.fmt.hexToBytes(vm.memory.data.items[352..384], "1d9befcd05a5323e6da4d435f3b617cdb3af83285c2df711ef39c01571827f9d");
+
+    const code = [_]u8{
+        0x60, 0x20, // outSize
+        0x60, 0x00, // outOffset
+        0x61, 0x01, 0x80, // inSize = 384
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x08, // address
+        0x62, 0x1f, 0xff, 0xff, // gas
+        0xf1, // CALL
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), success.limbs[0]);
+    try testing.expectEqual(@as(u8, 1), vm.memory.data.items[31]);
+    try testing.expectEqual(@as(u64, 113_821), vm.gas_used);
+}
+
 test "EVM: CALL dispatches BLAKE2F precompile (0x09) EIP-152 vector" {
     const testing = std.testing;
     const allocator = testing.allocator;

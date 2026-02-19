@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("types");
 const crypto = @import("crypto");
 const state = @import("state");
+const bn254_pairing = @import("bn254_pairing.zig");
 
 /// Execution context for EVM
 pub const ExecutionContext = struct {
@@ -674,65 +675,16 @@ pub const EVM = struct {
     }
 
     fn runBn256PairingPrecompile(self: *EVM, input: []const u8, required_gas: u64) !PrecompileResult {
-        if (input.len == 0) {
-            const out = try self.allocator.alloc(u8, 32);
-            @memset(out, 0);
-            out[31] = 1;
-            return PrecompileResult{ .success = true, .gas_used = required_gas, .output = out };
-        }
-        if (input.len % 192 != 0) {
+        const ok = bn254_pairing.pairingCheck(self.allocator, input) catch {
             return PrecompileResult{
                 .success = false,
                 .gas_used = required_gas,
                 .output = try self.allocator.alloc(u8, 0),
             };
-        }
-
-        var p = try bnPrime(self.allocator);
-        defer p.deinit();
-
-        var all_neutral = true;
-        var i: usize = 0;
-        while (i < input.len) : (i += 192) {
-            var g1 = self.bnPointFromInput(input[i .. i + 64], p) catch {
-                return PrecompileResult{
-                    .success = false,
-                    .gas_used = required_gas,
-                    .output = try self.allocator.alloc(u8, 0),
-                };
-            };
-            defer g1.deinit();
-
-            var g2_is_infinity = true;
-            var limb_idx: usize = 0;
-            while (limb_idx < 4) : (limb_idx += 1) {
-                const start = i + 64 + limb_idx * 32;
-                var limb = managedFromBigEndian(self.allocator, input[start .. start + 32]) catch {
-                    return PrecompileResult{
-                        .success = false,
-                        .gas_used = required_gas,
-                        .output = try self.allocator.alloc(u8, 0),
-                    };
-                };
-                defer limb.deinit();
-                if (!limb.eqlZero()) g2_is_infinity = false;
-                if (BigInt.order(limb, p) != .lt) {
-                    return PrecompileResult{
-                        .success = false,
-                        .gas_used = required_gas,
-                        .output = try self.allocator.alloc(u8, 0),
-                    };
-                }
-            }
-
-            if (!(g1.infinity or g2_is_infinity)) {
-                all_neutral = false;
-            }
-        }
-
+        };
         const out = try self.allocator.alloc(u8, 32);
         @memset(out, 0);
-        if (all_neutral) out[31] = 1;
+        if (ok) out[31] = 1;
         return PrecompileResult{ .success = true, .gas_used = required_gas, .output = out };
     }
 
