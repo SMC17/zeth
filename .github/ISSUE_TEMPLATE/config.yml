@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Zeth Project Brief
+    url: https://github.com/SMC17/zeth/blob/main/docs/community/PROJECT_BRIEF.md
+    about: Start here for project scope, current state, and priorities.
+  - name: Execution Backlog
+    url: https://github.com/SMC17/zeth/blob/main/docs/community/EXECUTION_BACKLOG.md
+    about: Canonical milestone and gate sequence.

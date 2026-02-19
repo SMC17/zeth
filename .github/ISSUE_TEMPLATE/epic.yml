@@ -1,0 +1,47 @@
+name: Epic
+about: Track a multi-issue milestone with explicit gates
+title: "[EPIC] "
+labels: ["epic"]
+body:
+  - type: input
+    id: objective
+    attributes:
+      label: Objective
+      description: One-sentence milestone outcome.
+      placeholder: Close P0-3 gas correctness with strict exact-gas gates.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: In Scope
+      description: Concrete deliverables.
+    validations:
+      required: true
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-Goals
+      description: Explicitly list what this epic will not do.
+  - type: textarea
+    id: gate
+    attributes:
+      label: Acceptance Gate
+      description: Required CI/tests/artifacts for completion.
+      placeholder: zig build test + differential artifacts + exact gas tests green.
+    validations:
+      required: true
+  - type: textarea
+    id: child_issues
+    attributes:
+      label: Child Issues
+      description: Link implementation issues.
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification Commands
+      description: Reproducible local checks.
+      placeholder: |
+        zig build test
+        zig build opcode-report -- --format json
+        ./zig-out/bin/run_reference_tests

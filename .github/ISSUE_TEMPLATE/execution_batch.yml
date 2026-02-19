@@ -1,0 +1,39 @@
+name: Execution Batch
+about: Concrete batch for one contributor/agent
+title: "[Batch] "
+labels: ["execution"]
+body:
+  - type: input
+    id: batch_goal
+    attributes:
+      label: Batch Goal
+      placeholder: Implement nested state journal snapshots for CALL/CREATE boundaries.
+    validations:
+      required: true
+  - type: textarea
+    id: tasks
+    attributes:
+      label: Task Checklist
+      placeholder: |
+        - [ ] Code changes
+        - [ ] Tests
+        - [ ] Differential vectors
+        - [ ] Docs/status updates
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      placeholder: Exact tests/artifacts that must pass.
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks / Edge Cases
+  - type: textarea
+    id: done_evidence
+    attributes:
+      label: Done Evidence
+      description: Fill before closing issue.

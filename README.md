@@ -77,6 +77,8 @@ Current execution order:
 - `docs/architecture/EVM_PARITY_STATUS.md`: parity and correctness deltas
 - `docs/architecture/STRATEGIC_ROADMAP.md`: long-horizon strategy
 - `docs/architecture/DOCUMENTATION_AUDIT_2026-02-19.md`: documentation audit and cleanup actions
+- `docs/community/PROJECT_BRIEF.md`: one-page project orientation
+- `docs/community/EXECUTION_BACKLOG.md`: canonical milestone/issue sequence
 - `docs/internal/*`: historical planning/session material (not source of truth)
 
 ## Contributing
