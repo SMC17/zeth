@@ -3,258 +3,86 @@
 [![CI Status](https://github.com/SMC17/zeth/workflows/CI/badge.svg)](https://github.com/SMC17/zeth/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Zig](https://img.shields.io/badge/Zig-0.14.1-orange.svg)](https://ziglang.org/)
-[![RLP Validated](https://img.shields.io/badge/RLP-98.8%25%20Ethereum%20Validated-green)](https://github.com/SMC17/zeth)
 
-**A production-grade Ethereum Virtual Machine implementation in Zig, designed for learning, development, and research.**
+Zeth is a Zig EVM focused on correctness-first execution semantics, differential validation, and a path to high-performance research tooling.
 
----
+## Current Reality
 
-## Vision
+As of **February 19, 2026**:
 
-Zeth aims to be:
+- Toolchain is pinned to `Zig 0.14.1`.
+- `zig build test` passes locally.
+- EVM includes call/create execution paths, precompile routing (`0x01..0x09`), and expanded gas tests.
+- CI publishes machine-readable validation artifacts for opcode and precompile differential reporting.
 
-- **Educational**: Learn Zig and EVM through clear, well-documented code
-- **Validated**: Tested against Ethereum's official test suite
-- **Extensible**: Modular design for research and development
-- **Foundation**: Base layer for Ethereum ecosystem tools in Zig
-- **Bridge**: Connect Zig and Ethereum developer communities
+For measured details, use:
 
----
-
-## Current Status
-
-### Measured Snapshot (February 17, 2026)
-
-- **Pinned Zig Version**: `0.14.1`
-- **Build/Test**: `zig build test` passes (106/106 tests)
-- **Opcode enum entries in source**: 143
-- **Opcode dispatch handlers in source**: 141
-- **Known core TODO markers**: 17 across `src/` + `validation/` critical paths
-
-### What Works
-
-- Core arithmetic and comparison operations  
-- Stack operations (PUSH, DUP, SWAP)  
-- Memory and storage operations (with EIP-2929)  
-- Flow control (JUMP, JUMPI)  
-- Environmental and block information  
-- Logging operations  
-- Reference implementation comparison framework  
-
-### In Progress
-
-- Close semantic TODOs in opcode implementations
-- Expand reference validation coverage
-- Implement remaining missing opcode handlers
-- Improve gas-model and interoperability accuracy
-
-**Target**: 100% opcode parity with verified behavior
-
----
+- `STATUS_SUMMARY.md`
+- `zig build opcode-report -- --format json`
+- GitHub Actions artifacts (`opcode_report.json`, `precompile_differential_report.json`)
 
 ## Quick Start
 
 ### Prerequisites
 
-- **Zig 0.14.1**: [Download](https://ziglang.org/download/)
-- **Python 3.11+** (optional, for validation tools)
+- Zig `0.14.1`
+- Python 3.11+ (optional, for PyEVM-based validation)
 
-### Installation
+### Build and Test
 
 ```bash
 git clone https://github.com/SMC17/zeth.git
 cd zeth
 zig build
+zig build test
 ```
 
-### Run Examples
+### Examples
 
 ```bash
-# Counter contract
 zig build run-counter
-
-# Storage operations
 zig build run-storage
-
-# Arithmetic operations
 zig build run-arithmetic
-
-# Event logging
 zig build run-events
 ```
 
-### Testing
+### Validation
 
 ```bash
-# Run all tests
-zig build test
-
-# Validate against Ethereum tests
+# RLP validators
 zig build validate-rlp
 zig build validate-rlp-decode
 zig build validate-rlp-invalid
 
-# Reference comparison (requires PyEVM)
-pip3 install eth-py-evm
-zig build
+# Machine-readable opcode/precompile report
+zig build opcode-report -- --format json --output /tmp/opcode_report.json
+
+# Differential runner (uses PyEVM/Geth if available)
 ./zig-out/bin/run_reference_tests
 ```
 
----
+## Project Priorities
 
-## Documentation
+Current execution order:
 
-- **[Architecture](docs/architecture/ARCHITECTURE.md)** - System design and components
-- **[EVM Parity Status](docs/architecture/EVM_PARITY_STATUS.md)** - Implementation progress
-- **[Strategic Roadmap](docs/architecture/STRATEGIC_ROADMAP.md)** - Long-term vision and blockchain path
-- **[Implementation Plan](docs/internal/IMPLEMENTATION_PLAN.md)** - Detailed development phases
-- **[Getting Started](docs/development/GETTING_STARTED.md)** - Developer guide
-- **[Contributing](CONTRIBUTING.md)** - How to contribute
-- **[Roadmap](docs/community/PROJECT_ROADMAP.md)** - Project vision and timeline
+1. Gas correctness closure (`CALL*`, `CREATE*`, `SELFDESTRUCT`, memory expansion/refund edge cases)
+2. State journaling and nested snapshot commit/revert semantics
+3. High-impact opcode parity closure (remaining edge semantics + precompiles)
+4. Differential validation hardening and CI regression gates
+5. Strategic tracks (`zeth-sim`, `zeth-wasm`, then `zeth-prove`)
 
----
+## Documentation Map
 
-## Project Structure
-
-```
-zeth/
-├── src/
-│   ├── types/        # U256, Address, Hash
-│   ├── crypto/       # Cryptographic primitives
-│   ├── rlp/          # RLP encoding/decoding (98.8% validated)
-│   ├── evm/          # EVM virtual machine
-│   └── state/        # State management
-├── examples/          # Example contracts
-├── validation/       # Testing and validation tools
-└── docs/             # Documentation
-```
-
----
-
-## Validation & Testing
-
-### RLP Implementation: 98.8% Validated
-
-- **Encoding**: 28/28 tests (100%)
-- **Decoding**: 28/28 tests (100%)
-- **Security**: 25/26 tests (96.2%)
-- **Total**: 82/83 official Ethereum tests passing
-
-### Reference Implementation Comparison
-
-- **PyEVM**: Integrated, 11/11 critical opcodes validated
-- **Geth**: Setup in progress
-
-### Test Coverage
-
-- **Internal Tests**: 95+ tests, 100% passing
-- **Ethereum RLP Tests**: 82/83 passing
-- **Reference Comparison**: 11 critical opcodes validated
-
----
-
-## Why Zig for Ethereum?
-
-### Memory Safety
-- Compile-time checks prevent vulnerabilities
-- Explicit memory management
-- No undefined behavior
-
-### Performance
-- Zero-cost abstractions
-- No garbage collector
-- Optimized compilation
-
-### Simplicity
-- Clear, readable code
-- No hidden control flow
-- Predictable execution
-
-### Cross-Platform
-- Easy cross-compilation
-- Native performance everywhere
-- Minimal dependencies
-
----
+- `STATUS_SUMMARY.md`: single measured status snapshot
+- `docs/architecture/EVM_PARITY_STATUS.md`: parity and correctness deltas
+- `docs/architecture/STRATEGIC_ROADMAP.md`: long-horizon strategy
+- `docs/architecture/DOCUMENTATION_AUDIT_2026-02-19.md`: documentation audit and cleanup actions
+- `docs/internal/*`: historical planning/session material (not source of truth)
 
 ## Contributing
 
-We welcome contributions! Priority areas:
+See `CONTRIBUTING.md` for contribution workflow and standards.
 
-1. **Missing Opcodes**: See [EVM Parity Status](docs/architecture/EVM_PARITY_STATUS.md)
-2. **Documentation**: Guides, tutorials, examples
-3. **Testing**: Edge cases, fuzzing, integration tests
-4. **Performance**: Optimization, benchmarking
+## Status
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
----
-
-## Roadmap
-
-### Phase 1: Foundation (Weeks 1-4)
-- Core EVM implementation
-- RLP validation
-- Reference comparison framework
-- Repository professionalization
-
-### Phase 2: Parity (Weeks 5-8)
-- Complete opcode implementation
-- Full test suite integration
-- Gas cost verification
-- Performance optimization
-
-### Phase 3: Ecosystem (Months 2-4)
-- JSON-RPC interface
-- Development tools
-- Educational resources
-- Community building
-
-See [Roadmap](docs/community/PROJECT_ROADMAP.md) for details.
-
----
-
-## Status Disclaimer
-
-**This is alpha software under active development.**
-
-- RLP: Ethereum validated (98.8%)
-- EVM: Implementation in progress (~30% complete)
-- Not production ready
-- Not audited
-- Do not use with real funds
-
-We validate systematically. We launch with proof.
-
----
-
-## License
-
-MIT License - See [LICENSE](LICENSE)
-
----
-
-## Acknowledgments
-
-- [Ethereum Foundation](https://ethereum.org) - Specifications and test vectors
-- [go-ethereum](https://github.com/ethereum/go-ethereum) - Reference implementation
-- [PyEVM](https://github.com/ethereum/py-evm) - Python reference
-- [Zig](https://ziglang.org/) - The programming language
-
----
-
-## Get Involved
-
-- **Star** the repository
-- **Report** bugs via [Issues](https://github.com/SMC17/zeth/issues)
-- **Discuss** in [Discussions](https://github.com/SMC17/zeth/discussions)
-- **Contribute** code or documentation
-- **Share** with Zig and Ethereum communities
-
----
-
-**Building systematically. Validating thoroughly. Launching with proof.**
-
-**Repository**: https://github.com/SMC17/zeth  
-**Status**: v0.3.0-alpha (Week 4 - Professionalization)  
-**Goal**: 100% EVM parity (6-8 weeks)
+Alpha software under active development. Claims should be tied to passing tests, differential results, and CI artifacts.

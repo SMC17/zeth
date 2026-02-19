@@ -1,3 +1,13 @@
+# Archived Internal Document
+
+This file is preserved for historical context and is not a current source-of-truth status document.
+
+Canonical current status:
+- `STATUS_SUMMARY.md`
+- `docs/architecture/EVM_PARITY_STATUS.md`
+
+---
+
 # Week 3 Status: Reference Comparison Framework Complete
 
 **Date**: Week 3-4  

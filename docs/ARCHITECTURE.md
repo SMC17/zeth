@@ -1,93 +1,81 @@
 # Zeth Architecture
 
-**Status**: Work in Progress  
-**Last Updated**: January 2025
+**Last Updated**: February 19, 2026
 
-## Overview
+## Scope
 
-Zeth is a production-grade Ethereum Virtual Machine implementation in Zig, designed to be:
+Zeth is currently an execution-focused EVM implementation in Zig with differential validation tooling and CI regression gates.
 
-- **Validated**: Tested against Ethereum's official test suite
-- **Extensible**: Modular design for research and development
-- **Educational**: Clear codebase for learning Zig and EVM
-- **Foundation**: Base layer for Ethereum ecosystem tools
+This document describes the current architecture, not historical milestones.
 
-## Core Components
+## System Modules
 
-### 1. Types (`src/types/`)
-- `U256`: 256-bit unsigned integers
-- `Address`: 20-byte Ethereum addresses
-- `Hash`: 32-byte hashes
-- All types include edge case handling and validation
+### 1. Core Types (`src/types/`)
 
-### 2. Crypto (`src/crypto/`)
-- Keccak-256 hashing (SHA3)
-- Cryptographic primitives
-- Foundation for address generation and signatures
+- `U256` arithmetic and conversion primitives
+- Ethereum `Address` and `Hash` representations
+- Shared low-level value semantics across EVM/state/validation paths
 
-### 3. RLP (`src/rlp/`)
-- **Status**: 98.8% Ethereum validated (82/83 tests passing)
-- Encoding and decoding of recursive-length prefix data
-- Security hardened through systematic testing
-- Used for transaction and block serialization
+### 2. Cryptography (`src/crypto/`)
 
-### 4. EVM (`src/evm/`)
-- Virtual machine core
-- 80+ opcodes implemented
-- Gas metering (EIP-2929, EIP-2200)
-- Stack, memory, and storage management
-- **Validation**: In progress via PyEVM comparison
+- Keccak-256 path used by EVM operations
+- secp256k1 paths used by ECRECOVER-related behavior
+- Precompile-supporting primitives and validation vectors
 
-### 5. State (`src/state/`)
-- Account state management
-- Storage trie operations
-- Balance tracking
-- Future: Full state tree implementation
+### 3. EVM Execution (`src/evm/`)
 
-## Design Principles
+- Opcode dispatch and stack/memory/storage execution
+- `CALL`, `STATICCALL`, `DELEGATECALL`, `CREATE`, `CREATE2` execution paths
+- Return-data plumbing for nested execution flow
+- Precompile routing for addresses `0x01..0x09`
+- Gas accounting for opcode families and memory expansion paths
 
-1. **Memory Safety**: Leverage Zig's compile-time checks
-2. **Explicit Allocation**: Clear ownership and lifecycle management
-3. **Test-Driven**: Validate against Ethereum ground truth
-4. **Modularity**: Independent, reusable components
-5. **Documentation**: Clear code and comprehensive guides
+### 4. State Model (`src/state/`)
 
-## Current Status
+- Account model (balance, nonce, storage, code)
+- External code introspection backing (`EXTCODESIZE`, `EXTCODECOPY`, `EXTCODEHASH`)
+- Nested-call correctness work toward transaction-scoped journaling
 
-###  Complete
-- RLP encoding/decoding (validated)
-- Core EVM opcodes (80+)
-- Basic state management
-- Validation framework
+### 5. Validation Tooling (`validation/`)
 
-###  In Progress
-- EVM opcode validation against Ethereum tests
-- Gas cost verification
-- Complete state tree implementation
-- Advanced opcodes (CALL variants, CREATE2)
+- Reference comparison runner (`run_reference_tests`)
+- Machine-readable report generator (`opcode_report`)
+- Differential precompile/opcode corpus used in CI artifact publication
 
-###  Planned
-- JSON-RPC interface
-- Full blockchain state management
-- Network layer (devp2p)
-- Consensus mechanisms
-- Performance optimizations
+## Execution Flow
 
-## Extensibility
+1. Bytecode is decoded and dispatched through opcode handlers in `src/evm/evm.zig`.
+2. State reads/writes route through the in-memory state model.
+3. `CALL*`/`CREATE*` operations spawn nested execution contexts.
+4. Return data and gas accounting are merged back into caller context.
+5. Differential and report tooling validates semantic/gas behavior against expected vectors and optional references.
 
-Zeth is designed as a foundation layer. Potential extensions:
+## Validation and CI Gates
 
-- **Research**: Experiment with new EVM features
-- **Tools**: Build development and testing tools
-- **Clients**: Full Ethereum clients
-- **Layer 2s**: Custom execution environments
-- **Educational**: Learn-by-reading implementation
+Current quality gates are enforced in CI:
 
-## Branching Strategy
+- `zig build test`
+- opcode/precompile regression checks from generated JSON reports
+- differential checks when reference implementations are available
+- formatting and multi-target build jobs
 
-- **main**: Stable, validated releases
-- **develop**: Integration branch
-- **feature/***: New features
-- **research/***: Experimental work
-- **parity/***: EVM specification compliance
+Machine-readable artifacts are published each run:
 
+- `opcode_report.json`
+- `precompile_differential_report.json`
+
+## Current Architecture Priorities
+
+1. Finish gas correctness closure for remaining edge accounting.
+2. Land transaction-scoped snapshot/journal semantics across nested calls.
+3. Expand parity closure and differential corpus breadth.
+4. Keep documentation status tied to executable/CI-backed metrics.
+
+## Non-Goals (Current Phase)
+
+The following are strategic follow-ons, not current architecture claims:
+
+- full networking stack
+- consensus implementation
+- full node synchronization
+- production RPC stack

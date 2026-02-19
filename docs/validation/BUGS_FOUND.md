@@ -1,3 +1,14 @@
+# Archived Validation Note
+
+This file is preserved for historical context and may contain outdated metrics or timelines.
+
+Use canonical current status sources:
+
+- `STATUS_SUMMARY.md`
+- `docs/architecture/EVM_PARITY_STATUS.md`
+- CI artifacts (`opcode_report.json`, `precompile_differential_report.json`)
+
+---
 # Bugs Found During Ethereum Validation
 
 **This document tracks real bugs found by testing against Ethereum.**

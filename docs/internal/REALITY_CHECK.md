@@ -1,3 +1,13 @@
+# Archived Internal Document
+
+This file is preserved for historical context and is not a current source-of-truth status document.
+
+Canonical current status:
+- `STATUS_SUMMARY.md`
+- `docs/architecture/EVM_PARITY_STATUS.md`
+
+---
+
 # Reality Check - What We Actually Know
 
 **Date**: October 29, 2025  

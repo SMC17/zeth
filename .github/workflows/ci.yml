@@ -172,6 +172,9 @@ jobs:
           echo "Code not formatted. Run: zig fmt ."
           exit 1
         fi
+
+    - name: Check Documentation Freshness
+      run: ./scripts/check_docs_fresh.sh
     
     - name: Ast Check
       run: find src validation examples -name "*.zig" -exec zig ast-check {} \; || true

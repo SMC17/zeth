@@ -1,3 +1,14 @@
+# Archived Validation Note
+
+This file is preserved for historical context and may contain outdated metrics or timelines.
+
+Use canonical current status sources:
+
+- `STATUS_SUMMARY.md`
+- `docs/architecture/EVM_PARITY_STATUS.md`
+- CI artifacts (`opcode_report.json`, `precompile_differential_report.json`)
+
+---
 # Known Issues & Boundaries
 
 **Engineering Principle**: We know exactly where our system breaks. No surprises.

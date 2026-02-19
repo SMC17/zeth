@@ -1,50 +1,36 @@
 # Zeth Status Summary
 
-**Date**: February 17, 2026  
-**Branch**: `main`  
-**Revision**: `1551242`
+**Snapshot Date**: February 19, 2026  
+**Revision**: `c42a54f`  
+**Toolchain**: Zig `0.14.1`
 
-## Measured Current State
+## Measured State
 
-- **Pinned Zig**: `0.14.1`
-- **Build/Test**: `zig build test` passes
-- **Test Count**: 106/106 passing
-- **Opcode enum entries (`src/evm/evm.zig`)**: 143
-- **Opcode dispatch handlers (`src/evm/evm.zig`)**: 141
-- **Core TODO markers (EVM/types/crypto/reference tooling)**: 17
+Measured locally from this revision:
 
-## Completed in This Update
+- `zig build test`: passes
+- Opcode enum entries (`src/evm/evm.zig`): `143`
+- Opcode dispatch handlers (`src/evm/evm.zig` switch arms): `142`
+- `TODO`/`FIXME` markers across `src/` + `validation/`: `2`
+- `./zig-out/bin/run_reference_tests`: `22/22` pass in no-reference mode when PyEVM/Geth are unavailable
+- `opcode_report` summary sample: total `22`, precompile tests `11`, failures `0` (local run without references)
 
-1. Pinned toolchain to Zig `0.14.1`.
-2. Fixed Zig stdlib API mismatches (`ArrayList`/reader usage) so the test build is green.
-3. Updated CI to run Zig `0.14.1`.
-4. Implemented concrete opcode behavior for:
-   - `EXP`
-   - `SHL`
-   - `SHR`
-   - `SAR`
-5. Added/updated tests that validate these opcode paths.
+## Source-of-Truth Commands
 
-## Remaining Priority Work
+```bash
+zig version
+zig build test
+zig build opcode-report -- --format json --output /tmp/opcode_report.json
+./zig-out/bin/run_reference_tests
+```
 
-### P1: Correctness Gaps in Existing Opcode Paths
+## Active P0/P1 Workstreams
 
-- External account code lookup TODOs (`EXTCODESIZE`, `EXTCODECOPY`, `EXTCODEHASH`)
-- `CALL`/`DELEGATECALL`/`STATICCALL` still simplified execution stubs
-- `BLOCKHASH` still placeholder without block history backend
-
-### P2: Validation Coverage
-
-- Expand reference comparison beyond current critical subset
-- Complete Geth integration in reference interfaces
-- Parse and compare full stack state in reference results
-
-### P3: Protocol Foundations
-
-- Proper Keccak-256 (currently SHA3 placeholder)
-- Full secp256k1 sign/verify/recover paths
-- Full-width `U256` division/modulo for large operands
+1. Complete gas-rule edge correctness and exact gas goldens
+2. Land transaction-scoped state journaling (snapshot/commit/revert across nested calls)
+3. Close high-impact parity gaps and expand differential corpus
 
 ## Notes
 
-Earlier status files in the repository reported January 2025 snapshots and should be treated as historical context. This file reflects a fresh measured run on February 17, 2026.
+- Differential comparisons against PyEVM/Geth are CI-gated when references are available.
+- Historical docs in `docs/internal/` and older roadmap/status files are archival context only.
