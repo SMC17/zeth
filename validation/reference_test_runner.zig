@@ -34,11 +34,13 @@ pub const TestRunner = struct {
         self.tests_run += 1;
 
         // Execute on our EVM
-        var our_result = try comparison.executeOurEVM(self.allocator, test_case.bytecode, test_case.calldata, 1000000);
+        const prepared = try comparison.prepareOpcodeCase(self.allocator, test_case);
+        defer prepared.deinit(self.allocator);
+        var our_result = try comparison.executeOurEVM(self.allocator, prepared.code, prepared.calldata, 1000000);
         defer our_result.deinit(self.allocator);
 
         // Try to execute on reference (PyEVM or Geth)
-        var ref_result = reference.executeWithPyEVM(self.allocator, test_case.bytecode, test_case.calldata) catch |err| {
+        var ref_result = reference.executeWithPyEVM(self.allocator, prepared.code, prepared.calldata) catch |err| {
             // Reference not available - skip comparison but mark test as run
             std.debug.print("Reference not available for {s}: {}\n", .{ test_case.name, err });
             return;
@@ -95,7 +97,7 @@ pub const TestRunner = struct {
     pub fn runAllCriticalTests(self: *TestRunner) !void {
         std.debug.print("Running critical opcode tests against reference...\n", .{});
 
-        for (comparison.critical_opcode_tests) |test_case| {
+        for (comparison.differential_test_cases) |test_case| {
             self.runOpcodeTest(test_case) catch |err| {
                 std.debug.print("Test {s} failed: {}\n", .{ test_case.name, err });
                 self.tests_failed += 1;
@@ -122,7 +124,7 @@ test "Test runner: Basic functionality" {
     defer runner.deinit();
 
     // Run a simple test
-    const test_case = comparison.critical_opcode_tests[0]; // ADD
+    const test_case = comparison.differential_test_cases[0]; // ADD
     try runner.runOpcodeTest(test_case);
 
     // Runner should have executed at least one test

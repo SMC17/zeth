@@ -42,17 +42,20 @@ pub fn main() !void {
     var tests_run: usize = 0;
     var tests_passed: usize = 0;
 
-    for (comparison.critical_opcode_tests) |test_case| {
+    for (comparison.differential_test_cases) |test_case| {
         tests_run += 1;
         std.debug.print("  Testing {s}... ", .{test_case.name});
 
+        const prepared = try comparison.prepareOpcodeCase(allocator, test_case);
+        defer prepared.deinit(allocator);
+
         // Execute on our EVM
-        var our_result = try comparison.executeOurEVM(allocator, test_case.bytecode, test_case.calldata, 1000000);
+        var our_result = try comparison.executeOurEVM(allocator, prepared.code, prepared.calldata, 1000000);
         defer our_result.deinit(allocator);
 
         // Try reference if available
         if (pyevm_available) {
-            var ref_result = reference.executeWithPyEVM(allocator, test_case.bytecode, test_case.calldata) catch |err| {
+            var ref_result = reference.executeWithPyEVM(allocator, prepared.code, prepared.calldata) catch |err| {
                 std.debug.print("ERROR (reference failed: {})\n", .{err});
                 continue;
             };
@@ -86,8 +89,8 @@ pub fn main() !void {
                         disc.description,
                         disc.our_value,
                         disc.reference_value,
-                        test_case.bytecode,
-                        test_case.calldata,
+                        prepared.code,
+                        prepared.calldata,
                         severity,
                     );
                 }

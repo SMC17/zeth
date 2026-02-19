@@ -56,10 +56,41 @@ jobs:
       run: |
         mkdir -p artifacts
         ./zig-out/bin/opcode_report --out artifacts/opcode_report.json
+        jq '{
+          generated_at_unix,
+          summary: {
+            total: .summary.precompile_total,
+            passed: .summary.precompile_passed,
+            failed: .summary.precompile_failed,
+            reference_available: .summary.reference_available,
+            reference_compared: .summary.reference_compared,
+            reference_mismatches: .summary.reference_mismatches
+          },
+          precompiles: [
+            .tests[]
+            | select(.group == "precompile")
+            | {
+                name,
+                precompile_id,
+                pass,
+                gas_used,
+                expected_gas,
+                gas_delta,
+                compared_with_reference,
+                reference_match,
+                reference_gas,
+                reference_gas_delta
+              }
+          ]
+        }' artifacts/opcode_report.json > artifacts/precompile_differential_report.json
 
     - name: Enforce Opcode Regression Gate
       run: |
         jq -e '.summary.failed == 0' artifacts/opcode_report.json
+
+    - name: Enforce Precompile Regression Gate
+      run: |
+        jq -e '.summary.precompile_failed == 0' artifacts/opcode_report.json
 
     - name: Enforce Differential Regression Gate
       run: |
@@ -70,6 +101,13 @@ jobs:
       with:
         name: opcode-report
         path: artifacts/opcode_report.json
+        if-no-files-found: error
+
+    - name: Upload Precompile Differential Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: precompile-differential-report
+        path: artifacts/precompile_differential_report.json
         if-no-files-found: error
 
   differential:

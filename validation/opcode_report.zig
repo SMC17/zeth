@@ -5,6 +5,8 @@ const types = @import("types");
 
 const TestEntry = struct {
     name: []const u8,
+    group: []const u8,
+    precompile_id: ?u8,
     description: []const u8,
     pass: bool,
     gas_used: u64,
@@ -20,6 +22,9 @@ const Summary = struct {
     total: usize,
     passed: usize,
     failed: usize,
+    precompile_total: usize,
+    precompile_passed: usize,
+    precompile_failed: usize,
     reference_available: bool,
     reference_compared: usize,
     reference_mismatches: usize,
@@ -66,22 +71,33 @@ pub fn main() !void {
 
     var passed: usize = 0;
     var failed: usize = 0;
+    var precompile_total: usize = 0;
+    var precompile_passed: usize = 0;
+    var precompile_failed: usize = 0;
     var ref_compared: usize = 0;
     var ref_mismatches: usize = 0;
 
-    for (comparison.critical_opcode_tests) |tc| {
+    for (comparison.differential_test_cases) |tc| {
         var pass = true;
         var compared_ref = false;
         var ref_match = true;
         var ref_gas: ?u64 = null;
         var ref_gas_delta: ?i64 = null;
 
-        var our = try comparison.executeOurEVM(allocator, tc.bytecode, tc.calldata, 1_000_000);
+        const prepared = try comparison.prepareOpcodeCase(allocator, tc);
+        defer prepared.deinit(allocator);
+
+        var our = try comparison.executeOurEVM(allocator, prepared.code, prepared.calldata, 1_000_000);
         defer our.deinit(allocator);
 
         if (our.our_error != null) {
             pass = false;
         } else {
+            if (tc.expected_return_data) |expected_return| {
+                if (!std.mem.eql(u8, our.our_result.return_data, expected_return)) {
+                    pass = false;
+                }
+            }
             if (tc.expected_stack_top) |expected_top| {
                 if (our.our_stack.len == 0 or !our.our_stack[0].eq(expected_top)) {
                     pass = false;
@@ -90,7 +106,7 @@ pub fn main() !void {
         }
 
         if (pyevm_available) {
-            var ref_result = reference.executeWithPyEVM(allocator, tc.bytecode, tc.calldata) catch null;
+            var ref_result = reference.executeWithPyEVM(allocator, prepared.code, prepared.calldata) catch null;
             if (ref_result) |*rr| {
                 defer rr.deinit();
                 compared_ref = true;
@@ -110,9 +126,15 @@ pub fn main() !void {
         }
 
         if (pass) passed += 1 else failed += 1;
+        if (std.mem.eql(u8, tc.group, "precompile")) {
+            precompile_total += 1;
+            if (pass) precompile_passed += 1 else precompile_failed += 1;
+        }
 
         try entries.append(.{
             .name = tc.name,
+            .group = tc.group,
+            .precompile_id = tc.precompile_id,
             .description = tc.description,
             .pass = pass,
             .gas_used = our.our_gas,
@@ -131,6 +153,9 @@ pub fn main() !void {
             .total = entries.items.len,
             .passed = passed,
             .failed = failed,
+            .precompile_total = precompile_total,
+            .precompile_passed = precompile_passed,
+            .precompile_failed = precompile_failed,
             .reference_available = reference_available,
             .reference_compared = ref_compared,
             .reference_mismatches = ref_mismatches,
