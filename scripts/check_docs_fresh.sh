@@ -9,19 +9,33 @@ fail() {
   exit 1
 }
 
+search() {
+  local pattern="$1"
+  local file="$2"
+  if command -v rg >/dev/null 2>&1; then
+    rg -n "$pattern" "$file"
+  else
+    grep -nE "$pattern" "$file"
+  fi
+}
+
 check_no_stale_markers() {
   local file="$1"
   local pattern="$2"
-  if rg -n "$pattern" "$file" >/dev/null 2>&1; then
+  if search "$pattern" "$file" >/dev/null 2>&1; then
     echo "docs-check: stale marker found in $file"
-    rg -n "$pattern" "$file"
+    search "$pattern" "$file"
     exit 1
   fi
 }
 
 check_archived_labeled() {
   local file="$1"
-  if ! head -n 12 "$file" | rg -qi "archived"; then
+  if command -v rg >/dev/null 2>&1; then
+    if ! head -n 12 "$file" | rg -qi "archived"; then
+      fail "missing archive label in $file"
+    fi
+  elif ! head -n 12 "$file" | grep -qi "archived"; then
     fail "missing archive label in $file"
   fi
 }
