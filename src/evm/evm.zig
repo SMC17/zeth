@@ -1869,7 +1869,7 @@ pub const EVM = struct {
             const end = @min(offset + 32, self.context.calldata.len);
             const copy_len = end - offset;
             var bytes = value.toBytes();
-            @memcpy(bytes[0..copy_len], self.context.calldata[offset..end]);
+            @memcpy(bytes[0..@intCast(copy_len)], self.context.calldata[@intCast(offset)..@intCast(end)]);
             value = types.U256.fromBytes(bytes);
         }
 
@@ -1901,7 +1901,7 @@ pub const EVM = struct {
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
-            try self.memory.data.resize(new_size);
+            try self.memory.data.resize(@intCast(new_size));
         }
 
         // Copy from calldata to memory
@@ -1911,20 +1911,20 @@ pub const EVM = struct {
 
             // Copy actual data
             if (copy_len > 0) {
-                @memcpy(self.memory.data.items[mem_offset..][0..copy_len], self.context.calldata[calldata_offset..src_end]);
+                @memcpy(self.memory.data.items[@intCast(mem_offset)..][0..@intCast(copy_len)], self.context.calldata[@intCast(calldata_offset)..@intCast(src_end)]);
             }
 
             // Zero out remaining bytes if length exceeds available calldata
             if (copy_len < length) {
-                @memset(self.memory.data.items[mem_offset + copy_len ..][0 .. length - copy_len], 0);
+                @memset(self.memory.data.items[@intCast(mem_offset + copy_len)..][0..@intCast(length - copy_len)], 0);
             }
         } else if (length > 0) {
             // Calldata offset beyond available data - zero out memory
-            @memset(self.memory.data.items[mem_offset..][0..length], 0);
+            @memset(self.memory.data.items[@intCast(mem_offset)..][0..@intCast(length)], 0);
         }
 
         // Gas cost: 3 base + memory expansion + copy cost
-        const mem_cost = self.memoryExpansionCost(new_size);
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         const copy_cost = (length + 31) / 32; // Words to copy (minimum 1)
         self.gas_used += 3 + mem_cost + copy_cost;
     }
@@ -1953,7 +1953,7 @@ pub const EVM = struct {
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
-            try self.memory.data.resize(new_size);
+            try self.memory.data.resize(@intCast(new_size));
         }
 
         // Copy from code to memory
@@ -1963,20 +1963,20 @@ pub const EVM = struct {
 
             // Copy actual data
             if (copy_len > 0) {
-                @memcpy(self.memory.data.items[mem_offset..][0..copy_len], self.context.code[code_offset..src_end]);
+                @memcpy(self.memory.data.items[@intCast(mem_offset)..][0..@intCast(copy_len)], self.context.code[@intCast(code_offset)..@intCast(src_end)]);
             }
 
             // Zero out remaining bytes if length exceeds available code
             if (copy_len < length) {
-                @memset(self.memory.data.items[mem_offset + copy_len ..][0 .. length - copy_len], 0);
+                @memset(self.memory.data.items[@intCast(mem_offset + copy_len)..][0..@intCast(length - copy_len)], 0);
             }
         } else if (length > 0) {
             // Code offset beyond available code - zero out memory
-            @memset(self.memory.data.items[mem_offset..][0..length], 0);
+            @memset(self.memory.data.items[@intCast(mem_offset)..][0..@intCast(length)], 0);
         }
 
         // Gas cost: 3 base + memory expansion + copy cost
-        const mem_cost = self.memoryExpansionCost(new_size);
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         const copy_cost = (length + 31) / 32; // Words to copy (minimum 1)
         self.gas_used += 3 + mem_cost + copy_cost;
     }
@@ -2043,11 +2043,11 @@ pub const EVM = struct {
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
-            try self.memory.data.resize(new_size);
+            try self.memory.data.resize(@intCast(new_size));
         }
 
         if (length > 0) {
-            @memset(self.memory.data.items[mem_offset..][0..length], 0);
+            @memset(self.memory.data.items[@intCast(mem_offset)..][0..@intCast(length)], 0);
 
             if (self.state_db) |db| {
                 const code = db.getCode(address);
@@ -2056,8 +2056,8 @@ pub const EVM = struct {
                     const copy_len = src_end - code_offset;
                     if (copy_len > 0) {
                         @memcpy(
-                            self.memory.data.items[mem_offset..][0..copy_len],
-                            code[code_offset..src_end],
+                            self.memory.data.items[@intCast(mem_offset)..][0..@intCast(copy_len)],
+                            code[@intCast(code_offset)..@intCast(src_end)],
                         );
                     }
                 }
@@ -2065,7 +2065,7 @@ pub const EVM = struct {
         }
 
         // Gas cost: 20 base + account access (EIP-2929) + memory expansion + copy cost
-        const mem_cost = self.memoryExpansionCost(new_size);
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         const copy_cost = (length + 31) / 32; // Words to copy (minimum 1)
         self.gas_used += 20 + mem_cost + copy_cost + try self.accountAccessCost(address);
     }
@@ -2192,10 +2192,10 @@ pub const EVM = struct {
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
-            try self.memory.data.resize(new_size);
+            try self.memory.data.resize(@intCast(new_size));
         }
 
-        const data = self.memory.data.items[off .. off + len];
+        const data = self.memory.data.items[@intCast(off)..@intCast(off + len)];
         var hash: [32]u8 = undefined;
         crypto.keccak256(data, &hash);
 
@@ -2204,7 +2204,7 @@ pub const EVM = struct {
 
         // Base cost (30) + word cost (6 per word) + memory expansion cost
         const word_count = (len + 31) / 32;
-        const mem_cost = self.memoryExpansionCost(new_size);
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         self.gas_used += 30 + 6 * word_count + mem_cost;
     }
 
@@ -2225,11 +2225,11 @@ pub const EVM = struct {
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
-            try self.memory.data.resize(new_size);
+            try self.memory.data.resize(@intCast(new_size));
         }
 
-        const data = try self.allocator.alloc(u8, len);
-        @memcpy(data, self.memory.data.items[off .. off + len]);
+        const data = try self.allocator.alloc(u8, @intCast(len));
+        @memcpy(data, self.memory.data.items[@intCast(off)..@intCast(off + len)]);
 
         try self.logs.append(Log{
             .address = self.context.address,
@@ -2238,7 +2238,7 @@ pub const EVM = struct {
         });
 
         // Base cost + topic cost + data cost + memory expansion cost
-        const mem_cost = self.memoryExpansionCost(new_size);
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         self.gas_used += 375 + 375 * topic_count + 8 * len + mem_cost;
     }
 
@@ -2257,14 +2257,14 @@ pub const EVM = struct {
     }
 
     fn readMemoryInput(self: *EVM, offset: u64, length: u64) ![]u8 {
-        const input = try self.allocator.alloc(u8, length);
+        const input = try self.allocator.alloc(u8, @intCast(length));
         @memset(input, 0);
         if (length == 0 or offset >= self.memory.data.items.len) return input;
 
         const available_end = @min(offset + length, self.memory.data.items.len);
         const copy_len = available_end - offset;
         if (copy_len > 0) {
-            @memcpy(input[0..copy_len], self.memory.data.items[offset..available_end]);
+            @memcpy(input[0..@intCast(copy_len)], self.memory.data.items[@intCast(offset)..@intCast(available_end)]);
         }
         return input;
     }
@@ -2277,12 +2277,12 @@ pub const EVM = struct {
             ret_offset;
         const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         if (new_size > self.memory.data.items.len) {
-            try self.memory.data.resize(new_size);
+            try self.memory.data.resize(@intCast(new_size));
         }
-        @memset(self.memory.data.items[ret_offset..][0..ret_length], 0);
+        @memset(self.memory.data.items[@intCast(ret_offset)..][0..@intCast(ret_length)], 0);
         const copy_len = @min(ret_length, data.len);
         if (copy_len > 0) {
-            @memcpy(self.memory.data.items[ret_offset..][0..copy_len], data[0..copy_len]);
+            @memcpy(self.memory.data.items[@intCast(ret_offset)..][0..@intCast(copy_len)], data[0..copy_len]);
         }
         return mem_cost;
     }
@@ -2730,14 +2730,14 @@ pub const EVM = struct {
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
-            try self.memory.data.resize(new_size);
+            try self.memory.data.resize(@intCast(new_size));
         }
 
         const value = try self.memory.load(self.allocator, offset);
         try self.stack.push(self.allocator, value);
 
         // Base cost + memory expansion cost
-        const mem_cost = self.memoryExpansionCost(new_size);
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         self.gas_used += 3 + mem_cost;
     }
 
@@ -2749,13 +2749,13 @@ pub const EVM = struct {
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
-            try self.memory.data.resize(new_size);
+            try self.memory.data.resize(@intCast(new_size));
         }
 
         try self.memory.store(self.allocator, offset, value);
 
         // Base cost + memory expansion cost
-        const mem_cost = self.memoryExpansionCost(new_size);
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         self.gas_used += 3 + mem_cost;
     }
 
@@ -2770,14 +2770,14 @@ pub const EVM = struct {
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
-            try self.memory.data.resize(new_size);
+            try self.memory.data.resize(@intCast(new_size));
         }
 
         // Store single byte
-        self.memory.data.items[offset] = byte_value;
+        self.memory.data.items[@intCast(offset)] = byte_value;
 
         // Base cost + memory expansion cost
-        const mem_cost = self.memoryExpansionCost(new_size);
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         self.gas_used += 3 + mem_cost;
     }
 
@@ -2859,7 +2859,7 @@ pub const EVM = struct {
 
     fn opJump(self: *EVM, pc: *usize) !void {
         const dest = try self.stack.pop();
-        pc.* = dest.limbs[0];
+        pc.* = @intCast(dest.limbs[0]);
         self.gas_used += 8;
     }
 
@@ -2868,7 +2868,7 @@ pub const EVM = struct {
         const condition = try self.stack.pop();
 
         if (!condition.isZero()) {
-            pc.* = dest.limbs[0];
+            pc.* = @intCast(dest.limbs[0]);
         }
         self.gas_used += 10;
     }
@@ -2917,16 +2917,16 @@ pub const EVM = struct {
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
-            try self.memory.data.resize(new_size);
+            try self.memory.data.resize(@intCast(new_size));
         }
 
         // Copy from return data to memory
         if (length > 0) {
-            @memcpy(self.memory.data.items[mem_offset..][0..length], self.return_data[return_data_offset .. return_data_offset + length]);
+            @memcpy(self.memory.data.items[@intCast(mem_offset)..][0..@intCast(length)], self.return_data[@intCast(return_data_offset)..@intCast(return_data_offset + length)]);
         }
 
         // Gas cost: 3 base + memory expansion + copy cost
-        const mem_cost = self.memoryExpansionCost(new_size);
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         const copy_cost = (length + 31) / 32; // Words to copy (minimum 1)
         self.gas_used += 3 + mem_cost + copy_cost;
     }
@@ -3151,11 +3151,11 @@ const Memory = struct {
         const off = offset.limbs[0];
         if (off + 32 > self.data.items.len) {
             _ = allocator;
-            try self.data.resize(off + 32);
+            try self.data.resize(@intCast(off + 32));
         }
 
         var bytes: [32]u8 = undefined;
-        @memcpy(&bytes, self.data.items[off..][0..32]);
+        @memcpy(&bytes, self.data.items[@intCast(off)..][0..32]);
         return types.U256.fromBytes(bytes);
     }
 
@@ -3163,11 +3163,11 @@ const Memory = struct {
         const off = offset.limbs[0];
         if (off + 32 > self.data.items.len) {
             _ = allocator;
-            try self.data.resize(off + 32);
+            try self.data.resize(@intCast(off + 32));
         }
 
         const bytes = value.toBytes();
-        @memcpy(self.data.items[off..][0..32], &bytes);
+        @memcpy(self.data.items[@intCast(off)..][0..32], &bytes);
     }
 };
 
