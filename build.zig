@@ -40,6 +40,15 @@ pub fn build(b: *std.Build) void {
     evm_mod.addImport("crypto", crypto_mod);
     evm_mod.addImport("state", state_mod);
 
+    const sim_mod = b.addModule("sim", .{
+        .root_source_file = b.path("src/sim.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    sim_mod.addImport("evm", evm_mod);
+    sim_mod.addImport("types", types_mod);
+    sim_mod.addImport("state", state_mod);
+
     // Main executable
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -224,6 +233,81 @@ pub fn build(b: *std.Build) void {
     const validate_rlp_invalid_step = b.step("validate-rlp-invalid", "Test invalid RLP rejection");
     validate_rlp_invalid_step.dependOn(&rlp_invalid_validator_run.step);
 
+    // VMTests runner (ethereum consensus tests)
+    const vm_test_runner_mod = b.createModule(.{
+        .root_source_file = b.path("validation/vm_test_runner.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    vm_test_runner_mod.addImport("evm", evm_mod);
+    vm_test_runner_mod.addImport("types", types_mod);
+    vm_test_runner_mod.addImport("state", state_mod);
+
+    const vm_test_runner_exe = b.addExecutable(.{
+        .name = "vm_test_runner",
+        .root_module = vm_test_runner_mod,
+    });
+    b.installArtifact(vm_test_runner_exe);
+
+    const vm_test_runner_run = b.addRunArtifact(vm_test_runner_exe);
+    if (b.args) |args| {
+        vm_test_runner_run.addArgs(args);
+    }
+    const validate_vm_step = b.step("validate-vm", "Run Ethereum VMTests (requires ethereum-tests clone)");
+    validate_vm_step.dependOn(&vm_test_runner_run.step);
+
+    // Vector pipeline: convert VMTests to vectors, run regression
+    const vector_runner_mod = b.createModule(.{
+        .root_source_file = b.path("validation/vector_runner.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    vector_runner_mod.addImport("evm", evm_mod);
+    vector_runner_mod.addImport("types", types_mod);
+
+    const vector_runner_exe = b.addExecutable(.{
+        .name = "vector_runner",
+        .root_module = vector_runner_mod,
+    });
+    b.installArtifact(vector_runner_exe);
+
+    const vector_runner_run = b.addRunArtifact(vector_runner_exe);
+    if (b.args) |args| vector_runner_run.addArgs(args);
+    const vector_run_step = b.step("vector-run", "Run test vector regression (usage: zig build vector-run -- path/to/vectors.json)");
+    vector_run_step.dependOn(&vector_runner_run.step);
+
+    // Opcode docs generator
+    const opcode_docs_mod = b.createModule(.{
+        .root_source_file = b.path("scripts/generate_opcode_docs.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    opcode_docs_mod.addImport("evm", evm_mod);
+    const opcode_docs_exe = b.addExecutable(.{
+        .name = "opcode_docs",
+        .root_module = opcode_docs_mod,
+    });
+    const opcode_docs_run = b.addRunArtifact(opcode_docs_exe);
+    if (b.args) |args| opcode_docs_run.addArgs(args);
+    const opcode_docs_step = b.step("opcode-docs", "Generate opcode reference (usage: zig build opcode-docs -- docs/opcodes.md)");
+    opcode_docs_step.dependOn(&opcode_docs_run.step);
+
+    // EVMC plugin (shared library for Geth/Reth/Besu)
+    const evmc_mod = b.createModule(.{
+        .root_source_file = b.path("src/evmc/zeth_evmc.zig"),
+        .target = target,
+        .optimize = .ReleaseSmall,
+    });
+    const evmc_lib = b.addSharedLibrary(.{
+        .name = "zeth_evmc",
+        .root_module = evmc_mod,
+    });
+    evmc_lib.rdynamic = true;
+    b.installArtifact(evmc_lib);
+    const evmc_step = b.step("evmc", "Build EVMC plugin (libzeth_evmc.so/.dylib)");
+    evmc_step.dependOn(&b.addInstallArtifact(evmc_lib, .{}).step);
+
+    // Differential fuzzing harness
     // Tests
     const test_step = b.step("test", "Run unit tests");
 
@@ -279,6 +363,13 @@ pub fn build(b: *std.Build) void {
     });
     const run_state_tests = b.addRunArtifact(state_tests);
     test_step.dependOn(&run_state_tests.step);
+
+    // Sim module tests
+    const sim_tests = b.addTest(.{
+        .root_module = sim_mod,
+    });
+    const run_sim_tests = b.addRunArtifact(sim_tests);
+    test_step.dependOn(&run_sim_tests.step);
 
     // Comprehensive EVM tests
     const comprehensive_test_mod = b.createModule(.{
@@ -460,4 +551,74 @@ pub fn build(b: *std.Build) void {
     }
     const opcode_report_step = b.step("opcode-report", "Generate machine-readable opcode/gas report");
     opcode_report_step.dependOn(&opcode_report_run.step);
+
+    // Differential fuzzing harness
+    const differential_fuzz_mod = b.createModule(.{
+        .root_source_file = b.path("validation/differential_fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    differential_fuzz_mod.addImport("evm", evm_mod);
+    differential_fuzz_mod.addImport("types", types_mod);
+    differential_fuzz_mod.addImport("comparison_tool", comparison_test_mod);
+    differential_fuzz_mod.addImport("reference_interfaces", reference_interfaces_mod);
+
+    const differential_fuzz_exe = b.addExecutable(.{
+        .name = "differential_fuzz",
+        .root_module = differential_fuzz_mod,
+    });
+    b.installArtifact(differential_fuzz_exe);
+
+    const differential_fuzz_run = b.addRunArtifact(differential_fuzz_exe);
+    if (b.args) |args| differential_fuzz_run.addArgs(args);
+    const differential_fuzz_step = b.step("differential-fuzz", "Run differential fuzz (Zeth vs PyEVM)");
+    differential_fuzz_step.dependOn(&differential_fuzz_run.step);
+
+    // zeth-wasm: Browser/edge EVM target (wasm32-wasi)
+    const wasm_mod = b.createModule(.{
+        .root_source_file = b.path("src/wasm/zeth_evm.zig"),
+        .target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .wasi }),
+        .optimize = .ReleaseSmall,
+    });
+    wasm_mod.addImport("sim", sim_mod);
+
+    const wasm_exe = b.addExecutable(.{
+        .name = "zeth_evm",
+        .root_module = wasm_mod,
+    });
+    wasm_exe.rdynamic = true;
+    wasm_exe.entry = .disabled;
+    const wasm_install = b.addInstallArtifact(wasm_exe, .{
+        .dest_dir = .{ .override = .lib },
+    });
+    b.getInstallStep().dependOn(&wasm_install.step);
+
+    const wasm_step = b.step("wasm", "Build zeth-wasm for browser/edge (wasm32-wasi)");
+    wasm_step.dependOn(&wasm_install.step);
+
+    // zeth-prove: RISC-V target for zkVM (SP1, RISC Zero)
+    const riscv_target = b.resolveTargetQuery(.{
+        .cpu_arch = .riscv64,
+        .os_tag = .linux,
+        .abi = .gnu,
+    });
+    const riscv_exe_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = riscv_target,
+        .optimize = optimize,
+    });
+    riscv_exe_mod.addImport("types", types_mod);
+    riscv_exe_mod.addImport("crypto", crypto_mod);
+    riscv_exe_mod.addImport("rlp", rlp_mod);
+    riscv_exe_mod.addImport("evm", evm_mod);
+    riscv_exe_mod.addImport("state", state_mod);
+
+    const riscv_exe = b.addExecutable(.{
+        .name = "zeth-riscv64",
+        .root_module = riscv_exe_mod,
+    });
+    b.installArtifact(riscv_exe);
+
+    const riscv_step = b.step("riscv", "Build zeth for RISC-V (riscv64-linux, zkVM path)");
+    riscv_step.dependOn(&b.addInstallArtifact(riscv_exe, .{}).step);
 }

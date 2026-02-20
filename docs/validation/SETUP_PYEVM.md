@@ -33,13 +33,14 @@ python3 -c "import eth; from eth.vm.forks import BerlinVM; print('PyEVM installe
 
 ## Test Setup
 
-After installing, run:
+After installing, from the Zeth project root run:
 ```bash
-cd /Users/seancollins/eth
 python3 validation/pyevm_executor.py 6005600301 ""
 ```
 
 This should execute ADD opcode (PUSH1 5, PUSH1 3, ADD) and return JSON result.
+
+**CI assumptions:** GitHub Actions installs `eth-py-evm` via `pip3 install eth-py-evm`. Differential tests run only when PyEVM (or Geth) is available; otherwise they skip gracefully.
 
 ## Alternative: Manual Testing
 

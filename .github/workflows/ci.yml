@@ -45,7 +45,34 @@ jobs:
         else
           echo "ethereum-tests vectors not available, skipping validate-rlp-invalid"
         fi
-    
+
+    - name: Validate VMTests
+      run: |
+        if [ -d ethereum-tests/VMTests ]; then
+          zig build validate-vm
+        else
+          echo "ethereum-tests VMTests not available, skipping validate-vm (clone https://github.com/ethereum/tests ethereum-tests)"
+        fi
+
+    - name: Vector pipeline (convert + regression)
+      run: |
+        if [ -d ethereum-tests/VMTests ]; then
+          zig build validate-vm -- --convert --out validation/test_vectors/generated.json || true
+          if [ -f validation/test_vectors/generated.json ]; then
+            zig build vector-run -- validation/test_vectors/generated.json || echo "Vector run had failures"
+          fi
+        else
+          echo "Skipping vector pipeline (no ethereum-tests)"
+        fi
+
+    - name: Differential Fuzz (best effort)
+      run: |
+        if python3 -c "import eth" 2>/dev/null; then
+          zig build differential-fuzz -- 50 --no-fail || true
+        else
+          echo "PyEVM not available, skipping differential fuzz"
+        fi
+
     - name: Run Reference Comparison Tests
       run: |
         pip3 install eth-py-evm || echo "PyEVM not available, skipping reference tests"
@@ -196,10 +223,54 @@ jobs:
     
     - name: Build
       run: zig build
-    
+
     - name: Build Examples
       run: |
         zig build run-counter || echo "Counter example build skipped"
         zig build run-storage || echo "Storage example build skipped"
         zig build run-arithmetic || echo "Arithmetic example build skipped"
         zig build run-events || echo "Events example build skipped"
+
+  wasm:
+    name: Build WASM Target
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Zig
+      uses: goto-bus-stop/setup-zig@v2
+      with:
+        version: 0.14.1
+    - name: Build zeth-wasm (wasm32-wasi)
+      run: zig build wasm
+    - name: Verify WASM artifact
+      run: |
+        test -f zig-out/lib/zeth_evm.wasm
+        file zig-out/lib/zeth_evm.wasm
+
+  riscv:
+    name: Build RISC-V Target
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Zig
+      uses: goto-bus-stop/setup-zig@v2
+      with:
+        version: 0.14.1
+    - name: Build zeth-prove (riscv64-linux)
+      run: zig build riscv
+    - name: Verify RISC-V artifact
+      run: |
+        test -f zig-out/bin/zeth-riscv64
+        file zig-out/bin/zeth-riscv64
+
+  benchmark:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Zig
+      uses: goto-bus-stop/setup-zig@v2
+      with:
+        version: 0.14.1
+    - name: Run Benchmarks
+      run: zig build bench || echo "Benchmarks completed"

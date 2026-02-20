@@ -59,6 +59,9 @@ zig build opcode-report -- --format json --output /tmp/opcode_report.json
 
 # Differential runner (uses PyEVM/Geth if available)
 ./zig-out/bin/run_reference_tests
+
+# VMTests (requires: git clone https://github.com/ethereum/tests ethereum-tests)
+zig build validate-vm
 ```
 
 ## Project Priorities

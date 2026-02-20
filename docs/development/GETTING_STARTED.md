@@ -12,7 +12,7 @@ Welcome to Zeth! This guide will help you get started with developing and contri
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/zeth.git
+git clone https://github.com/SMC17/zeth.git
 cd zeth
 
 # Build the project

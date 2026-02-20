@@ -46,7 +46,7 @@
 ## For Researchers
 
 1. **Explore Architecture**
-   - [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md)
+   - [ARCHITECTURE.md](../ARCHITECTURE.md)
    - Module structure
    - Design decisions
 
