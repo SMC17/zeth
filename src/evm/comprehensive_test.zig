@@ -1,4 +1,5 @@
 const std = @import("std");
+const crypto = @import("crypto");
 const evm = @import("evm");
 const types = @import("types");
 const state = @import("state");
@@ -12,6 +13,25 @@ fn addressFromU256(value: types.U256) types.Address {
         address_bytes[19 - i] = b;
     }
     return types.Address{ .bytes = address_bytes };
+}
+
+fn deriveCreate2AddressForTest(creator: types.Address, salt: types.U256, init_code: []const u8) types.Address {
+    var init_hash: [32]u8 = undefined;
+    crypto.keccak256(init_code, &init_hash);
+
+    var preimage: [85]u8 = undefined;
+    preimage[0] = 0xff;
+    @memcpy(preimage[1..21], creator.bytes[0..20]);
+    const salt_bytes = salt.toBytes();
+    @memcpy(preimage[21..53], salt_bytes[0..32]);
+    @memcpy(preimage[53..85], init_hash[0..32]);
+
+    var out: [32]u8 = undefined;
+    crypto.keccak256(&preimage, &out);
+
+    var addr_bytes: [20]u8 = undefined;
+    @memcpy(addr_bytes[0..20], out[12..32]);
+    return types.Address{ .bytes = addr_bytes };
 }
 
 // Comprehensive EVM Test Suite
@@ -1196,6 +1216,59 @@ test "EVM: CREATE2 is deterministic for same salt and init code" {
     const a1 = try vm1.stack.pop();
     const a2 = try vm2.stack.pop();
     try testing.expect(a1.eq(a2));
+}
+
+test "EVM: top-level REVERT rolls back CREATE2 deployed code" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var creator = types.Address.zero;
+    creator.bytes[19] = 0xdd;
+    try db.createAccount(creator);
+    try db.setBalance(creator, types.U256.fromU64(1_000_000));
+
+    var context = evm.ExecutionContext.default();
+    context.address = creator;
+    context.caller = creator;
+
+    var vm = try evm.EVM.initWithState(allocator, 2_000_000, context, &db);
+    defer vm.deinit();
+
+    const init_code = [_]u8{ 0x60, 0x2a, 0x60, 0x00, 0x53, 0x60, 0x01, 0x60, 0x00, 0xf3 };
+    const salt = types.U256.fromU64(1);
+    const expected_addr = deriveCreate2AddressForTest(creator, salt, &init_code);
+
+    const code = [_]u8{
+        0x60, 0x60, 0x60, 0x00, 0x53, // byte 0
+        0x60, 0x2a, 0x60, 0x01, 0x53, // byte 1
+        0x60, 0x60, 0x60, 0x02, 0x53, // byte 2
+        0x60, 0x00, 0x60, 0x03, 0x53, // byte 3
+        0x60, 0x53, 0x60, 0x04, 0x53, // byte 4
+        0x60, 0x60, 0x60, 0x05, 0x53, // byte 5
+        0x60, 0x01, 0x60, 0x06, 0x53, // byte 6
+        0x60, 0x60, 0x60, 0x07, 0x53, // byte 7
+        0x60, 0x00, 0x60, 0x08, 0x53, // byte 8
+        0x60, 0xf3, 0x60, 0x09, 0x53, // byte 9
+        0x60, 0x01, // PUSH1 salt
+        0x60, 0x0a, // length
+        0x60, 0x00, // offset
+        0x60, 0x00, // value
+        0xf5, // CREATE2
+        0x60, 0x00, // revert offset
+        0x60, 0x00, // revert length
+        0xfd, // REVERT
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    try testing.expect(!result.success);
+    try testing.expect(!db.exists(expected_addr));
+    try testing.expectEqual(@as(usize, 0), db.getCode(expected_addr).len);
 }
 
 test "EVM: Nested CALL persists storage in state DB" {
