@@ -1540,8 +1540,8 @@ pub const EVM = struct {
         const bit_pos_u256 = try self.stack.pop();
         const value = try self.stack.pop();
 
-        const bit_pos = @as(u6, @intCast(bit_pos_u256.limbs[0] & 31)); // 0-31 bytes
-        const bit_index = bit_pos * 8 + 7; // Which bit to check (0-255)
+        const bit_pos: u16 = @intCast(bit_pos_u256.limbs[0] & 31); // 0-31 bytes
+        const bit_index: u16 = bit_pos * 8 + 7; // Which bit to check (0-255)
 
         if (bit_index >= 256) {
             // No extension needed
@@ -1550,29 +1550,27 @@ pub const EVM = struct {
             return;
         }
 
-        // Check the sign bit
+        // Check the sign bit in the internal little-endian byte/limb layout.
         const byte_idx = bit_index / 8;
         const bit_in_byte = bit_index % 8;
-        const sign_bit = (value.limbs[byte_idx / 4] >> @as(u6, @intCast((byte_idx % 4) * 8 + bit_in_byte))) & 1;
+        const sign_bit = (value.limbs[byte_idx / 8] >> @as(u6, @intCast((byte_idx % 8) * 8 + bit_in_byte))) & 1;
 
         // If sign bit is 1, extend with 0xFF, else with 0x00
         var result = value;
         if (sign_bit == 1) {
-            // Set all bits above bit_index to 1
+            // Set all bytes above selected byte (more significant bytes) to 0xFF.
             const mask_start_byte = (bit_index / 8) + 1;
 
-            // Build mask for extension (U256 has 4 limbs of u64)
             var mask = types.U256.zero();
             var i: usize = mask_start_byte;
             while (i < 32) : (i += 1) {
-                const limb_idx = i / 8; // 8 bytes per limb
+                const limb_idx = i / 8;
                 const byte_in_limb = i % 8;
                 if (limb_idx < 4) {
                     mask.limbs[limb_idx] |= @as(u64, 0xFF) << @as(u6, @intCast(byte_in_limb * 8));
                 }
             }
 
-            // Apply mask
             result.limbs[0] |= mask.limbs[0];
             result.limbs[1] |= mask.limbs[1];
             result.limbs[2] |= mask.limbs[2];

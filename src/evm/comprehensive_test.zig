@@ -170,6 +170,66 @@ test "EVM: SAR preserves sign bit for negative values" {
     try testing.expectEqual(@as(u64, 0xFFFFFFFFFFFFFFFF), result.limbs[3]);
 }
 
+test "EVM: SIGNEXTEND extends sign from high byte correctly" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1_000_000);
+    defer vm.deinit();
+
+    const bytecode = [_]u8{
+        0x7f, // PUSH32 value
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x80,
+        0x11,
+        0x22,
+        0x33,
+        0x44,
+        0x55,
+        0x66,
+        0x77,
+        0x88,
+        0x60, 0x08, // PUSH1 8 (extend from 9th least-significant byte)
+        0x0b, // SIGNEXTEND
+    };
+
+    _ = try vm.execute(&bytecode, &[_]u8{});
+    const result = try vm.stack.pop();
+
+    const expected = types.U256{
+        .limbs = [_]u64{
+            0x1122334455667788,
+            0xffffffffffffff80,
+            0xffffffffffffffff,
+            0xffffffffffffffff,
+        },
+    };
+    try testing.expect(result.eq(expected));
+    try testing.expectEqual(@as(u64, 11), vm.gas_used);
+}
+
 test "EVM: CALLCODE opcode executes placeholder path" {
     const testing = std.testing;
     const allocator = testing.allocator;
