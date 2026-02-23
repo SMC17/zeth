@@ -449,6 +449,92 @@ pub const critical_opcode_tests = [_]OpcodeTestCase{
         },
         .description = "SIGNEXTEND extends from high selected byte using correct limb indexing",
     },
+    .{
+        .name = "SDIV (-7 / 2)",
+        .bytecode = &[_]u8{
+            0x60, 0x06, // 6
+            0x19, // NOT => -7
+            0x60, 0x02, // 2
+            0x05, // SDIV
+        },
+        .calldata = &[_]u8{},
+        .expected_gas = 14,
+        .expected_stack_top = types.U256{
+            .limbs = [_]u64{
+                @as(u64, 0xfffffffffffffffd),
+                0xffffffffffffffff,
+                0xffffffffffffffff,
+                0xffffffffffffffff,
+            },
+        },
+        .description = "SDIV rounds toward zero for negative dividend",
+    },
+    .{
+        .name = "SMOD (-7 % 3)",
+        .bytecode = &[_]u8{
+            0x60, 0x06, // 6
+            0x19, // NOT => -7
+            0x60, 0x03, // 3
+            0x07, // SMOD
+        },
+        .calldata = &[_]u8{},
+        .expected_gas = 14,
+        .expected_stack_top = types.U256{
+            .limbs = [_]u64{
+                0xffffffffffffffff,
+                0xffffffffffffffff,
+                0xffffffffffffffff,
+                0xffffffffffffffff,
+            },
+        },
+        .description = "SMOD keeps sign of dividend for negative dividend",
+    },
+    .{
+        .name = "SLT (-1 < 1)",
+        .bytecode = &[_]u8{
+            0x60, 0x00, // 0
+            0x19, // NOT => -1
+            0x60, 0x01, // 1
+            0x12, // SLT
+        },
+        .calldata = &[_]u8{},
+        .expected_gas = 12,
+        .expected_stack_top = types.U256.one(),
+        .description = "SLT compares signed values across sign boundary",
+    },
+    .{
+        .name = "SGT (-1 > 1)",
+        .bytecode = &[_]u8{
+            0x60, 0x00, // 0
+            0x19, // NOT => -1
+            0x60, 0x01, // 1
+            0x13, // SGT
+        },
+        .calldata = &[_]u8{},
+        .expected_gas = 12,
+        .expected_stack_top = types.U256.zero(),
+        .description = "SGT compares signed values across sign boundary",
+    },
+    .{
+        .name = "SAR (negative, shift>=256)",
+        .bytecode = &[_]u8{
+            0x60, 0x00, // 0
+            0x19, // NOT => -1
+            0x60, 0xff, // 255
+            0x1d, // SAR
+        },
+        .calldata = &[_]u8{},
+        .expected_gas = 12,
+        .expected_stack_top = types.U256{
+            .limbs = [_]u64{
+                0xffffffffffffffff,
+                0xffffffffffffffff,
+                0xffffffffffffffff,
+                0xffffffffffffffff,
+            },
+        },
+        .description = "SAR preserves all ones for negative value at large shift",
+    },
 };
 
 const sha256_abc_input = [_]u8{ 'a', 'b', 'c' };
