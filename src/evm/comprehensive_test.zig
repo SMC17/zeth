@@ -2253,6 +2253,25 @@ test "EVM: nested CALL->CREATE failure rolls back callee nonce and balance" {
     try testing.expectEqual(@as(u64, 0), try db.getNonce(callee));
 }
 
+test "EVM: PREVRANDAO returns context value when set" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var ctx = evm.ExecutionContext.default();
+    ctx.block_prev_randao = types.U256.fromU64(0x12345678);
+
+    var vm = try evm.EVM.initWithContext(allocator, 100_000, ctx);
+    defer vm.deinit();
+
+    const code = [_]u8{0x44}; // PREVRANDAO/DIFFICULTY
+
+    const exec_result = try vm.execute(&code, &[_]u8{});
+    defer if (exec_result.return_data.len > 0) allocator.free(exec_result.return_data);
+    defer allocator.free(exec_result.logs);
+    const val = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 0x12345678), val.limbs[0]);
+}
+
 test "EVM: top-level REVERT rolls back nested SELFDESTRUCT effects" {
     const testing = std.testing;
     const allocator = testing.allocator;

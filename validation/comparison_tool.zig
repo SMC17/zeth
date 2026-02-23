@@ -346,14 +346,14 @@ pub const critical_opcode_tests = [_]OpcodeTestCase{
         .name = "MSTORE",
         .bytecode = &[_]u8{ 0x60, 0x42, 0x60, 0x00, 0x52 }, // PUSH1 0x42, PUSH1 0, MSTORE
         .calldata = &[_]u8{},
-        .expected_gas = 9, // PUSH1(3) + PUSH1(3) + MSTORE(3) + memory expansion
+        .expected_gas = 12, // PUSH1(3) + PUSH1(3) + MSTORE(3) + mem expansion (0->32)
         .description = "Store to memory",
     },
     .{
         .name = "MLOAD",
         .bytecode = &[_]u8{ 0x60, 0x00, 0x51 }, // PUSH1 0, MLOAD
         .calldata = &[_]u8{},
-        .expected_gas = 6, // PUSH1(3) + MLOAD(3) + memory expansion
+        .expected_gas = 9, // PUSH1(3) + MLOAD(3) + mem expansion (0->32)
         .description = "Load from memory",
     },
 
@@ -381,6 +381,22 @@ pub const critical_opcode_tests = [_]OpcodeTestCase{
         .expected_gas = 9,
         .expected_stack_top = types.U256.one(), // 5 == 5 is true
         .description = "Equality comparison",
+    },
+    .{
+        .name = "BYTE (LSB index)",
+        .bytecode = &[_]u8{ 0x60, 0xaa, 0x60, 0x1f, 0x1a }, // PUSH1 0xaa, PUSH1 31, BYTE
+        .calldata = &[_]u8{},
+        .expected_gas = 9,
+        .expected_stack_top = types.U256.fromU64(0xaa),
+        .description = "BYTE returns least-significant byte at index 31",
+    },
+    .{
+        .name = "SIGNEXTEND (positive byte)",
+        .bytecode = &[_]u8{ 0x60, 0x7f, 0x60, 0x00, 0x0b }, // PUSH1 0x7f, PUSH1 0, SIGNEXTEND
+        .calldata = &[_]u8{},
+        .expected_gas = 11,
+        .expected_stack_top = types.U256.fromU64(0x7f),
+        .description = "SIGNEXTEND keeps positive sign when top bit is clear",
     },
 };
 

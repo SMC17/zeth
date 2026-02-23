@@ -19,6 +19,7 @@ pub const ExecutionContext = struct {
     block_gaslimit: u64,
     chain_id: u64,
     block_base_fee: ?u64 = null, // EIP-1559 base fee
+    block_prev_randao: ?types.U256 = null, // Post-Merge: opcode 0x44 returns PREVRANDAO when set
 
     pub fn default() ExecutionContext {
         return ExecutionContext{
@@ -35,6 +36,7 @@ pub const ExecutionContext = struct {
             .block_gaslimit = 0,
             .chain_id = 1, // Mainnet
             .block_base_fee = null,
+            .block_prev_randao = null,
         };
     }
 };
@@ -2115,7 +2117,8 @@ pub const EVM = struct {
     }
 
     fn opDifficulty(self: *EVM) !void {
-        try self.stack.push(self.allocator, self.context.block_difficulty);
+        // Post-Merge: opcode 0x44 returns PREVRANDAO when present.
+        try self.stack.push(self.allocator, self.context.block_prev_randao orelse self.context.block_difficulty);
         self.gas_used += 2;
     }
 
