@@ -230,11 +230,33 @@ test "EVM: SIGNEXTEND extends sign from high byte correctly" {
     try testing.expectEqual(@as(u64, 11), vm.gas_used);
 }
 
-test "EVM: CALLCODE opcode executes placeholder path" {
+test "EVM: CALLCODE executes target code in caller storage context" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var vm = try evm.EVM.init(allocator, 1000000);
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var code_addr = types.Address.zero;
+    code_addr.bytes[19] = 0x0a;
+    const target_code = [_]u8{
+        0x60, 0x2a, // value = 42
+        0x60, 0x01, // key = 1
+        0x55, // SSTORE
+        0x00, // STOP
+    };
+    try db.setCode(code_addr, &target_code);
+    try db.createAccount(code_addr);
+
+    var caller = types.Address.zero;
+    caller.bytes[19] = 0xbb;
+    try db.createAccount(caller);
+
+    var context = evm.ExecutionContext.default();
+    context.address = caller;
+    context.caller = caller;
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, context, &db);
     defer vm.deinit();
 
     // CALLCODE(gas, addr, value, argsOff, argsLen, retOff, retLen)
@@ -244,14 +266,20 @@ test "EVM: CALLCODE opcode executes placeholder path" {
         0x60, 0x00, // argsLen
         0x60, 0x00, // argsOff
         0x60, 0x00, // value
-        0x60, 0x00, // address
-        0x60, 0x64, // gas
+        0x60, 0x0a, // code address
+        0x61, 0xff, 0xff, // gas
         0xf2, // CALLCODE
     };
 
     _ = try vm.execute(&bytecode, &[_]u8{});
     const result = try vm.stack.pop();
     try testing.expectEqual(@as(u64, 1), result.limbs[0]);
+
+    const caller_stored = try db.getStorage(caller, types.U256.fromU64(1));
+    try testing.expectEqual(@as(u64, 0x2a), caller_stored.limbs[0]);
+
+    const target_stored = try db.getStorage(code_addr, types.U256.fromU64(1));
+    try testing.expect(target_stored.isZero());
 }
 
 test "EVM: BLOCKHASH does not underflow for low block numbers" {
