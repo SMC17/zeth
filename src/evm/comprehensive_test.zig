@@ -545,13 +545,13 @@ test "EVM: CALL dispatches IDENTITY precompile (0x04) with exact gas" {
     try testing.expectEqual(@as(u8, 0x04), vm.memory.data.items[71]);
 
     // Total gas under current memory accounting model:
-    // PUSH4+PUSH1+MSTORE = 9
+    // PUSH4+PUSH1+MSTORE = 12 (includes 0->32 memory expansion)
     // CALL arg PUSHes = 21
     // CALL base (warm precompile) = 800
     // CALL return memory expansion 32->96 = 6
     // IDENTITY precompile = 18
     // RETURNDATACOPY pushes + op = 13
-    try testing.expectEqual(@as(u64, 863), vm.gas_used);
+    try testing.expectEqual(@as(u64, 866), vm.gas_used);
 }
 
 test "EVM: IDENTITY precompile fails with OOG and consumes forwarded gas" {
@@ -1282,6 +1282,83 @@ test "EVM: SELFDESTRUCT transfers balance and deletes account state" {
     try testing.expectEqual(@as(usize, 0), db.getCode(sender).len);
 }
 
+test "EVM: SELFDESTRUCT uses warm beneficiary access cost when pre-warmed" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var sender = types.Address.zero;
+    sender.bytes[19] = 0xaa;
+    var beneficiary = types.Address.zero;
+    beneficiary.bytes[19] = 0x0b;
+
+    try db.createAccount(sender);
+    try db.createAccount(beneficiary);
+    try db.setBalance(sender, types.U256.zero());
+
+    var context = evm.ExecutionContext.default();
+    context.address = sender;
+    context.caller = sender;
+
+    var vm = try evm.EVM.initWithState(allocator, 100_000, context, &db);
+    defer vm.deinit();
+
+    const bytecode = [_]u8{
+        0x60, 0x0b, // PUSH1 beneficiary
+        0x31, // BALANCE (warms beneficiary)
+        0x50, // POP
+        0x60, 0x0b, // PUSH1 beneficiary
+        0xff, // SELFDESTRUCT
+    };
+
+    const result = try vm.execute(&bytecode, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    try testing.expect(result.success);
+    try testing.expectEqual(@as(u64, 7_708), vm.gas_used);
+    try testing.expectEqual(@as(u64, 4_800), vm.gas_refund);
+}
+
+test "EVM: SELFDESTRUCT with zero balance does not charge new-account creation cost" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var sender = types.Address.zero;
+    sender.bytes[19] = 0xaa;
+    var beneficiary = types.Address.zero;
+    beneficiary.bytes[19] = 0x0c; // remains nonexistent
+
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.zero());
+
+    var context = evm.ExecutionContext.default();
+    context.address = sender;
+    context.caller = sender;
+
+    var vm = try evm.EVM.initWithState(allocator, 100_000, context, &db);
+    defer vm.deinit();
+
+    const bytecode = [_]u8{
+        0x60, 0x0c, // PUSH1 beneficiary
+        0xff, // SELFDESTRUCT
+    };
+
+    const result = try vm.execute(&bytecode, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    try testing.expect(result.success);
+    try testing.expectEqual(@as(u64, 7_603), vm.gas_used);
+    try testing.expectEqual(@as(u64, 4_800), vm.gas_refund);
+    try testing.expect(!db.exists(beneficiary));
+}
+
 test "EVM: Stack operations (DUP and SWAP)" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -1320,6 +1397,54 @@ test "EVM: Memory operations" {
 
     const result = try vm.execute(&bytecode, &[_]u8{});
     try testing.expect(result.success);
+}
+
+test "EVM: MSTORE8 memory expansion boundary (32 -> 33 bytes) has exact gas" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 100_000);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0xaa, // value
+        0x60, 0x1f, // offset 31
+        0x53, // MSTORE8 => expands to 32 bytes
+        0x60, 0xbb, // value
+        0x60, 0x20, // offset 32
+        0x53, // MSTORE8 => expands to 33 bytes (2nd word)
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    try testing.expect(result.success);
+    try testing.expectEqual(@as(u64, 24), vm.gas_used);
+}
+
+test "EVM: repeated MSTORE in same range does not repay memory expansion gas" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 100_000);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x01, // value
+        0x60, 0x00, // offset
+        0x52, // MSTORE (expands to 32 bytes)
+        0x60, 0x02, // value
+        0x60, 0x00, // offset
+        0x52, // MSTORE (no further expansion)
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    try testing.expect(result.success);
+    try testing.expectEqual(@as(u64, 21), vm.gas_used);
 }
 
 test "EVM: Storage operations" {

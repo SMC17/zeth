@@ -2727,6 +2727,7 @@ pub const EVM = struct {
         const offset = try self.stack.pop();
         const off = offset.limbs[0];
         const new_size = off + 32;
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
@@ -2737,7 +2738,6 @@ pub const EVM = struct {
         try self.stack.push(self.allocator, value);
 
         // Base cost + memory expansion cost
-        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         self.gas_used += 3 + mem_cost;
     }
 
@@ -2746,6 +2746,7 @@ pub const EVM = struct {
         const value = try self.stack.pop();
         const off = offset.limbs[0];
         const new_size = off + 32;
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
@@ -2755,7 +2756,6 @@ pub const EVM = struct {
         try self.memory.store(self.allocator, offset, value);
 
         // Base cost + memory expansion cost
-        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         self.gas_used += 3 + mem_cost;
     }
 
@@ -2767,6 +2767,7 @@ pub const EVM = struct {
         const byte_value = @as(u8, @truncate(value_u256.limbs[0]));
 
         const new_size = offset + 1;
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
@@ -2777,7 +2778,6 @@ pub const EVM = struct {
         self.memory.data.items[@intCast(offset)] = byte_value;
 
         // Base cost + memory expansion cost
-        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         self.gas_used += 3 + mem_cost;
     }
 
