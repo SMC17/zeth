@@ -434,7 +434,7 @@ test "EVM: CALL dispatches RIPEMD160 precompile (0x03)" {
         0x60, 0x00, // inOffset
         0x60, 0x00, // value
         0x60, 0x03, // address
-        0x61, 0xff, 0xff, // gas
+        0x63, 0xff, 0xff, 0xff, 0xff, // gas (high, let EIP-150 cap apply)
         0xf1, // CALL
     };
     const precompile_result = try vm.execute(&code, &[_]u8{});
@@ -2127,6 +2127,57 @@ test "EVM: CREATE revert restores creator nonce and balance" {
     const creator_balance = try db.getBalance(creator);
     try testing.expectEqual(@as(u64, 100), creator_balance.limbs[0]);
     try testing.expectEqual(@as(u64, 0), try db.getNonce(creator));
+}
+
+test "EVM: nested CALL->CREATE failure rolls back callee nonce and balance" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var callee = types.Address.zero;
+    callee.bytes[19] = 0x0b;
+    try db.createAccount(callee);
+    try db.setBalance(callee, types.U256.fromU64(10));
+
+    // Callee builds 1-byte failing init code and executes CREATE(value=1).
+    // Nested execution should not leave nonce/balance mutations behind.
+    const callee_code = [_]u8{
+        0x60, 0xfd, // REVERT opcode byte
+        0x60, 0x00, // mem offset
+        0x53, // MSTORE8
+        0x60, 0x01, // length
+        0x60, 0x00, // offset
+        0x60, 0x01, // value
+        0xf0, // CREATE
+        0x50, // POP create result (zero)
+        0x00, // STOP
+    };
+    try db.setCode(callee, &callee_code);
+
+    var vm = try evm.EVM.initWithState(allocator, 300_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const caller = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x0b, // callee
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+    };
+
+    const result = try vm.execute(&caller, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const call_success = try vm.stack.pop();
+    try testing.expect(call_success.isZero());
+    try testing.expectEqual(@as(u64, 10), (try db.getBalance(callee)).limbs[0]);
+    try testing.expectEqual(@as(u64, 0), try db.getNonce(callee));
 }
 
 test "EVM: top-level REVERT rolls back nested SELFDESTRUCT effects" {
