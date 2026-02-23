@@ -151,14 +151,13 @@ pub fn formatBytecode(code: []const u8) ![]const u8 {
 
 /// Compare two execution results
 pub fn compareResults(allocator: std.mem.Allocator, our: *ExecutionComparison, reference: ExecutionComparison.ReferenceResult) !void {
-    // Compare gas (allow small variance)
-    const gas_diff = if (our.our_gas > reference.gas_used) our.our_gas - reference.gas_used else reference.gas_used - our.our_gas;
-    if (gas_diff > 100) { // Allow 100 gas variance for now
+    // Compare gas (exact match required)
+    if (our.our_gas != reference.gas_used) {
         const our_str = try std.fmt.allocPrint(allocator, "{}", .{our.our_gas});
         defer allocator.free(our_str);
         const ref_str = try std.fmt.allocPrint(allocator, "{}", .{reference.gas_used});
         defer allocator.free(ref_str);
-        try our.addDiscrepancy("Gas", "Gas consumption differs significantly", our_str, ref_str, allocator);
+        try our.addDiscrepancy("Gas", "Gas consumption differs (exact match required)", our_str, ref_str, allocator);
     }
 
     // Compare success
