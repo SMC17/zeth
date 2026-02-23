@@ -1578,8 +1578,112 @@ test "EVM: CALL OOG in child obeys EIP-150 reserve and does not exhaust parent" 
 
     const call_success = try vm.stack.pop();
     try testing.expect(call_success.isZero());
-    // EIP-150 reserve should leave parent with remaining gas.
-    try testing.expect(vm.gas_used < vm.gas_limit);
+    // Parent push gas: 21
+    // CALL base: 700 + 2600 (cold) = 3300
+    // Child OOG consumes full forwarded gas cap: 65535
+    try testing.expectEqual(@as(u64, 68_856), vm.gas_used);
+}
+
+test "EVM: CALL with value forwards 2300 stipend even when requested gas is zero" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var sender = types.Address.zero;
+    sender.bytes[19] = 0xaa;
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.fromU64(1_000_000));
+
+    var target = types.Address.zero;
+    target.bytes[19] = 0x0a;
+    try db.createAccount(target);
+    const callee_code = [_]u8{
+        0x60, 0x01, // PUSH1 1
+        0x00, // STOP
+    };
+    try db.setCode(target, &callee_code);
+
+    var ctx = evm.ExecutionContext.default();
+    ctx.address = sender;
+    ctx.caller = sender;
+
+    var vm = try evm.EVM.initWithState(allocator, 100_000, ctx, &db);
+    defer vm.deinit();
+
+    const caller = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x01, // value (non-zero => stipend-eligible)
+        0x60, 0x0a, // address
+        0x60, 0x00, // requested gas = 0
+        0xf1, // CALL
+    };
+
+    const result = try vm.execute(&caller, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const call_success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), call_success.limbs[0]);
+
+    // Parent push gas: 21
+    // CALL base (existing account): 700 + 2600 cold + 9000 value = 12300
+    // Child execution uses stipend gas: PUSH1(3) + STOP(0) = 3
+    try testing.expectEqual(@as(u64, 12_324), vm.gas_used);
+}
+
+test "EVM: value CALL OOG consumes forwarded gas plus stipend" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var sender = types.Address.zero;
+    sender.bytes[19] = 0xaa;
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.fromU64(1_000_000));
+
+    var target = types.Address.zero;
+    target.bytes[19] = 0x0a;
+    try db.createAccount(target);
+    // Infinite loop to force hard OOG and consume the entire child gas limit.
+    const callee_code = [_]u8{ 0x5b, 0x60, 0x00, 0x56 };
+    try db.setCode(target, &callee_code);
+
+    var ctx = evm.ExecutionContext.default();
+    ctx.address = sender;
+    ctx.caller = sender;
+
+    var vm = try evm.EVM.initWithState(allocator, 100_000, ctx, &db);
+    defer vm.deinit();
+
+    const caller = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x01, // value
+        0x60, 0x0a, // address
+        0x60, 0x00, // requested gas = 0
+        0xf1, // CALL
+    };
+
+    const result = try vm.execute(&caller, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const call_success = try vm.stack.pop();
+    try testing.expect(call_success.isZero());
+
+    // Parent push gas: 21
+    // CALL base (existing account): 700 + 2600 cold + 9000 value = 12300
+    // Child OOG consumes full child limit (stipend): 2300
+    try testing.expectEqual(@as(u64, 14_621), vm.gas_used);
 }
 
 test "EVM: CALL cold then warm account access has exact gas" {

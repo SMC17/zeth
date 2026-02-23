@@ -2322,7 +2322,7 @@ pub const EVM = struct {
         );
 
         if (precompileId(code_address)) |pid| {
-            const pc_result = try self.runPrecompile(pid, calldata, gas_plan.forwarded);
+            const pc_result = try self.runPrecompile(pid, calldata, gas_plan.child_limit);
             charged_child_gas = pc_result.gas_used;
             call_success = pc_result.success;
             return_data_local = pc_result.output;
@@ -2348,7 +2348,7 @@ pub const EVM = struct {
                 const child_result_opt = blk: {
                     const res = child.execute(target_code, calldata) catch {
                         call_success = false;
-                        charged_child_gas = gas_plan.forwarded;
+                        charged_child_gas = gas_plan.child_limit;
                         // No return data available when child execution fails hard.
                         return_data_local = &[_]u8{};
                         break :blk null;
@@ -2362,7 +2362,7 @@ pub const EVM = struct {
                     self.allocator.free(child_result.return_data);
                     child_logs = child_result.logs;
                     call_success = child_result.success;
-                    charged_child_gas = @min(child_result.gas_used, gas_plan.forwarded);
+                    charged_child_gas = @min(child_result.gas_used, gas_plan.child_limit);
                     if (child_result.success) {
                         try db.commitSnapshot(call_snapshot);
                         call_committed = true;
