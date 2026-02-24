@@ -1254,6 +1254,53 @@ test "EVM: STATICCALL executes with zero call value" {
     try testing.expectEqual(@as(u8, 0x00), vm.memory.data.items[31]);
 }
 
+test "EVM: STATICCALL forbids SSTORE and reverts callee state changes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var callee_addr = types.Address.zero;
+    callee_addr.bytes[19] = 0x0b;
+    const callee_code = [_]u8{
+        0x60, 0x2a, // value
+        0x60, 0x01, // key
+        0x55, // SSTORE (must fail under STATICCALL)
+        0x00, // STOP
+    };
+    try db.createAccount(callee_addr);
+    try db.setCode(callee_addr, &callee_code);
+
+    var caller = types.Address.zero;
+    caller.bytes[19] = 0xaa;
+    try db.createAccount(caller);
+
+    var context = evm.ExecutionContext.default();
+    context.address = caller;
+    context.caller = caller;
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, context, &db);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x0b, // address
+        0x61, 0xff, 0xff, // gas
+        0xfa, // STATICCALL
+    };
+
+    _ = try vm.execute(&code, &[_]u8{});
+    const success = try vm.stack.pop();
+    try testing.expect(success.isZero());
+
+    const stored = try db.getStorage(callee_addr, types.U256.fromU64(1));
+    try testing.expect(stored.isZero());
+}
+
 test "EVM: DELEGATECALL preserves caller context" {
     const testing = std.testing;
     const allocator = testing.allocator;

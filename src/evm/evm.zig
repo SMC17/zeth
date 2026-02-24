@@ -64,6 +64,7 @@ pub const EVM = struct {
     return_data: []const u8 = &[_]u8{},
     return_data_owned: ?[]u8 = null,
     halted: bool = false,
+    is_static: bool = false,
     // State database for external account lookups (optional)
     state_db: ?*state.StateDB = null,
 
@@ -2301,6 +2302,7 @@ pub const EVM = struct {
         args_length: u64,
         ret_offset: u64,
         ret_length: u64,
+        child_static: bool,
     ) anyerror!bool {
         const calldata = try self.readMemoryInput(args_offset, args_length);
         defer self.allocator.free(calldata);
@@ -2344,6 +2346,7 @@ pub const EVM = struct {
                 child_ctx.calldata = calldata;
 
                 var child = try EVM.initWithState(self.allocator, gas_plan.child_limit, child_ctx, db);
+                child.is_static = self.is_static or child_static;
                 defer child.deinit();
 
                 const child_result_opt = blk: {
@@ -2421,6 +2424,7 @@ pub const EVM = struct {
             args_length.limbs[0],
             ret_offset.limbs[0],
             ret_length.limbs[0],
+            false,
         );
     }
 
@@ -2446,6 +2450,7 @@ pub const EVM = struct {
             args_length.limbs[0],
             ret_offset.limbs[0],
             ret_length.limbs[0],
+            true,
         );
     }
 
@@ -2475,6 +2480,7 @@ pub const EVM = struct {
             args_length.limbs[0],
             ret_offset.limbs[0],
             ret_length.limbs[0],
+            false,
         );
     }
 
@@ -2500,6 +2506,7 @@ pub const EVM = struct {
             args_length.limbs[0],
             ret_offset.limbs[0],
             ret_length.limbs[0],
+            false,
         );
     }
 
@@ -2802,6 +2809,7 @@ pub const EVM = struct {
     }
 
     fn opSstore(self: *EVM) !void {
+        if (self.is_static) return error.StaticStateChange;
         const key = try self.stack.pop();
         const new_value = try self.stack.pop();
         const current_value = if (self.state_db) |db|
