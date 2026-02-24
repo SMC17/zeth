@@ -2204,6 +2204,7 @@ pub const EVM = struct {
         const off = offset.limbs[0];
         const len = length.limbs[0];
         const new_size = off + len;
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
@@ -2219,7 +2220,6 @@ pub const EVM = struct {
 
         // Base cost (30) + word cost (6 per word) + memory expansion cost
         const word_count = (len + 31) / 32;
-        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         self.gas_used += 30 + 6 * word_count + mem_cost;
     }
 
@@ -2238,6 +2238,7 @@ pub const EVM = struct {
         const off = offset.limbs[0];
         const len = length.limbs[0];
         const new_size = off + len;
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
@@ -2254,7 +2255,6 @@ pub const EVM = struct {
         });
 
         // Base cost + topic cost + data cost + memory expansion cost
-        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         self.gas_used += 375 + 375 * topic_count + 8 * len + mem_cost;
     }
 

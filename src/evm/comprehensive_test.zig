@@ -1017,6 +1017,48 @@ test "EVM: CALL dispatches IDENTITY precompile (0x04) with exact gas" {
     try testing.expectEqual(@as(u64, 866), vm.gas_used);
 }
 
+test "EVM: RETURNDATACOPY non-zero copy charges memory expansion exactly" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1_000_000);
+    defer vm.deinit();
+
+    // CALL SHA256 precompile with empty input and no return-memory copy in CALL itself.
+    // Then RETURNDATACOPY 32 bytes into offset 128, which should expand memory to 160 bytes (5 words).
+    const code = [_]u8{
+        0x60, 0x00, // outSize = 0
+        0x60, 0x00, // outOffset = 0
+        0x60, 0x00, // inSize = 0
+        0x60, 0x00, // inOffset = 0
+        0x60, 0x00, // value = 0
+        0x60, 0x02, // address = SHA256 precompile
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+        0x60, 0x20, // len = 32
+        0x60, 0x00, // returnDataOffset = 0
+        0x60, 0x80, // memOffset = 128
+        0x3e, // RETURNDATACOPY
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const call_success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), call_success.limbs[0]);
+
+    var expected_sha: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash("", &expected_sha, .{});
+    try testing.expectEqualSlices(u8, &expected_sha, vm.memory.data.items[128..160]);
+
+    // CALL pushes = 21
+    // CALL base (warm precompile) + SHA256(empty) = 800 + 60 = 860
+    // RETURNDATACOPY pushes = 9
+    // RETURNDATACOPY op = base 3 + copy 1 + mem expansion 15 (0 -> 5 words) = 19
+    try testing.expectEqual(@as(u64, 909), vm.gas_used);
+}
+
 test "EVM: IDENTITY precompile fails with OOG and consumes forwarded gas" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -2250,6 +2292,58 @@ test "EVM: SHA3 hashing" {
 
     const result = try vm.execute(&bytecode, &[_]u8{});
     try testing.expect(result.success);
+}
+
+test "EVM: SHA3 charges memory expansion gas when hashing uncached region" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1_000_000);
+    defer vm.deinit();
+
+    const bytecode = [_]u8{
+        0x60, 0x20, // len = 32
+        0x60, 0x00, // offset = 0
+        0x20, // SHA3 (expands memory 0 -> 32 bytes)
+    };
+
+    const result = try vm.execute(&bytecode, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+    try testing.expect(result.success);
+
+    // PUSH1 + PUSH1 + SHA3(base30 + words6 + mem3)
+    try testing.expectEqual(@as(u64, 45), vm.gas_used);
+}
+
+test "EVM: LOG1 charges memory expansion gas when emitting from uncached region" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1_000_000);
+    defer vm.deinit();
+
+    const bytecode = [_]u8{
+        0x60, 0xaa, // topic
+        0x60, 0x20, // len = 32
+        0x60, 0x00, // offset = 0
+        0xa1, // LOG1 (expands memory 0 -> 32 bytes)
+    };
+
+    const result = try vm.execute(&bytecode, &[_]u8{});
+    defer {
+        for (result.logs) |log| {
+            allocator.free(log.topics);
+            allocator.free(log.data);
+        }
+        allocator.free(result.logs);
+    }
+
+    try testing.expect(result.success);
+    try testing.expectEqual(@as(usize, 1), result.logs.len);
+    try testing.expectEqual(@as(usize, 32), result.logs[0].data.len);
+    // PUSH1*3 = 9; LOG1 = 375 + 375 + 8*32 + mem3 = 1009
+    try testing.expectEqual(@as(u64, 1_018), vm.gas_used);
 }
 
 test "EVM: REVERT handling" {
