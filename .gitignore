@@ -26,3 +26,6 @@ Thumbs.db
 # Temporary files
 /tmp/zeth_*
 *.tmp
+
+# Local archived research/docs drafts (kept out of canonical repo docs)
+.local_docs_archive/

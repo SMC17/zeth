@@ -8,11 +8,12 @@ Zeth is a Zig EVM focused on correctness-first execution semantics, differential
 
 ## Current Reality
 
-As of **February 19, 2026**:
+As of **February 24, 2026** (`084c26e`):
 
 - Toolchain is pinned to `Zig 0.14.1`.
 - `zig build test` passes locally.
 - EVM includes call/create execution paths, precompile routing (`0x01..0x09`), and expanded gas tests.
+- Static-context write prohibitions are enforced for `SSTORE`, `LOG*`, `CREATE*`, `SELFDESTRUCT`, and value-carrying `CALL`/`CALLCODE`.
 - CI publishes machine-readable validation artifacts for opcode and precompile differential reporting.
 
 For measured details, use:
@@ -20,6 +21,8 @@ For measured details, use:
 - `STATUS_SUMMARY.md`
 - `zig build opcode-report -- --format json`
 - GitHub Actions artifacts (`opcode_report.json`, `precompile_differential_report.json`)
+
+For local-only research drafts not yet accepted as canonical docs, use `.local_docs_archive/` (gitignored).
 
 ## Quick Start
 
@@ -68,10 +71,10 @@ zig build validate-vm
 
 Current execution order:
 
-1. Gas correctness closure (`CALL*`, `CREATE*`, `SELFDESTRUCT`, memory expansion/refund edge cases)
+1. Finish gas correctness closure (`CALL*`, `CREATE*`, `SELFDESTRUCT`, memory expansion/refund edge cases)
 2. State journaling and nested snapshot commit/revert semantics
-3. High-impact opcode parity closure (remaining edge semantics + precompiles)
-4. Differential validation hardening and CI regression gates
+3. High-impact opcode parity closure (remaining edge semantics + precompiles beyond current corpus)
+4. Differential validation hardening and CI regression gates (broader corpus, machine-readable reports)
 5. Strategic tracks (`zeth-sim`, `zeth-wasm`, then `zeth-prove`)
 
 ## Documentation Map

@@ -9,6 +9,16 @@ This file maps strategic direction to concrete GitHub issues so contributors can
 - `Path A`: correctness and protocol fidelity foundation (must complete first)
 - `Path B`: strategic unlock tracks after `Path A` is stable
 
+## Current Status (February 24, 2026)
+
+- Initial Path A issue train is complete and green in CI: `#3`, `#4`, `#6`, `#7`, `#9`, `#10`.
+- Recent follow-on parity/correctness batches (post-`#10`) landed:
+  - signed-op and `SIGNEXTEND` fixes + parity vectors
+  - `CALLCODE` storage-context regression
+  - `EXTCODECOPY` memory gas correction + state edge tests
+  - static-context write prohibition enforcement and regressions
+- Current next focus remains Path A completion in substance: gas edge closure, journaling, broader parity/differential coverage.
+
 ## Milestone A0: Gas Correctness Closure
 
 Goal: complete CALL*/CREATE*/SELFDESTRUCT/memory-expansion edge correctness with exact gas assertions.
@@ -51,6 +61,7 @@ GitHub Tracking:
 
 - Epic: `#8`
 - Batches: `#9`, `#10`
+- Status: base batch sequence complete; follow-on parity closure continues in subsequent commits/issues
 
 ## Milestone B0: Strategic Unlock Track
 
@@ -66,6 +77,7 @@ GitHub Tracking:
 
 - Epic: `#11`
 - Batches: `#12`, `#13`, `#14`, `#15`
+- Status: blocked on stronger Path A correctness/protocol-fidelity base
 
 ## Tracking Rules
 
@@ -73,9 +85,11 @@ GitHub Tracking:
 - Every merged PR must link issue + show gate evidence.
 - If status changes, update issue and `STATUS_SUMMARY.md` instead of adding conflicting docs.
 
-## Execution Start Order
+## Execution Order (Current)
 
-1. `#3` then `#4`
-2. `#6` then `#7`
-3. `#9` then `#10`
-4. After Path A is stable, start `#12` -> `#13` -> `#14` -> `#15`
+1. Finish Path A correctness closure work not fully exhausted by the initial issue train:
+   - gas-rule edge/refund accounting closure
+   - state journaling/snapshots
+   - parity edge semantics + broader differential coverage
+2. Convert remaining slack items into explicit issues with gates (GeneralStateTests harness, BlockchainTests, pre-state loader support, differential expansion)
+3. After Path A gates are consistently green, start `#12` -> `#13` -> `#14` -> `#15`

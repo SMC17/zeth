@@ -1,6 +1,6 @@
 # Zeth Architecture
 
-**Last Updated**: February 19, 2026
+**Last Updated**: February 24, 2026
 
 ## Scope
 
@@ -28,13 +28,14 @@ This document describes the current architecture, not historical milestones.
 - `CALL`, `STATICCALL`, `DELEGATECALL`, `CREATE`, `CREATE2` execution paths
 - Return-data plumbing for nested execution flow
 - Precompile routing for addresses `0x01..0x09`
-- Gas accounting for opcode families and memory expansion paths
+- Static-context execution restrictions for state-changing/logging operations
+- Gas accounting for opcode families and memory expansion paths (including `EXTCODECOPY` memory expansion)
 
 ### 4. State Model (`src/state/`)
 
 - Account model (balance, nonce, storage, code)
 - External code introspection backing (`EXTCODESIZE`, `EXTCODECOPY`, `EXTCODEHASH`)
-- Nested-call correctness work toward transaction-scoped journaling
+- Nested-call correctness work toward transaction-scoped journaling (still pending full journal/snapshot model)
 
 ### 5. Validation Tooling (`validation/`)
 
@@ -58,6 +59,7 @@ Current quality gates are enforced in CI:
 - opcode/precompile regression checks from generated JSON reports
 - differential checks when reference implementations are available
 - formatting and multi-target build jobs
+- docs freshness regression check (`scripts/check_docs_fresh.sh`)
 
 Machine-readable artifacts are published each run:
 
@@ -70,6 +72,12 @@ Machine-readable artifacts are published each run:
 2. Land transaction-scoped snapshot/journal semantics across nested calls.
 3. Expand parity closure and differential corpus breadth.
 4. Keep documentation status tied to executable/CI-backed metrics.
+
+## Documentation Governance
+
+- Canonical status/architecture docs live in repository root + `docs/architecture/` and must be CI-fresh.
+- Historical planning/session context lives under `docs/internal/` (archived reference, not source of truth).
+- Local research drafts not yet accepted into canonical docs should be kept in `.local_docs_archive/` (gitignored).
 
 ## Non-Goals (Current Phase)
 

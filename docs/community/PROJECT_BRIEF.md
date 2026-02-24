@@ -17,14 +17,16 @@ Use these files first:
 - Pinned Zig toolchain (`0.14.1`) with green core CI gates
 - Implemented call/create + return-data plumbing baseline
 - Implemented precompile routing `0x01..0x09` and differential reporting artifacts
+- Expanded signed/bit parity vectors and fixed `SIGNEXTEND` high-byte semantics
+- Added static-context write-prohibition enforcement regressions (`STATICCALL` paths)
 - Added docs freshness CI gate to prevent stale status drift
 
 ## What Is Next (Execution Order)
 
-1. Close remaining gas correctness edges with strict exact-gas tests.
+1. Finish gas correctness closure (refund/accounting edges + exact gas goldens).
 2. Land transaction-scoped journaling/snapshots for nested commit/revert.
-3. Close high-impact opcode parity gaps and expand differential corpus.
-4. Scale validation hardening (per-op + per-precompile machine-readable CI tracking).
+3. Close high-impact opcode parity gaps and expand differential corpus/reference coverage.
+4. Expand test harness scope (GeneralStateTests path, then BlockchainTests) with reproducible gates.
 5. Build strategic tracks: `zeth-sim`, `zeth-wasm`, then `zeth-prove`.
 
 ## Why This Project Matters

@@ -1,6 +1,6 @@
 # Technical Excellence
 
-**Last Updated**: February 19, 2026
+**Last Updated**: February 24, 2026
 
 ## Definition
 
@@ -32,12 +32,14 @@ No milestone is considered complete until all relevant gates are green locally a
 - opcode semantics tests for critical paths
 - precompile routing and behavior coverage (`0x01..0x09`)
 - `CALL*`/`CREATE*` semantics and return-data plumbing tests
+- static-context write prohibition regressions (`STATICCALL` + forbidden state/log/create/destruct/value paths)
 
 ### P0 Gas Correctness
 
 - exact `gas_used` assertions on critical flows
 - no relaxed tolerances for key families
 - regression checks on per-op/per-precompile gas deltas
+- memory expansion gas correctness on copy/introspection paths (e.g. `EXTCODECOPY`)
 
 ### P1 Protocol Fidelity
 
@@ -73,7 +75,8 @@ Avoid static claims that drift (old version tags, stale week labels, historical 
 
 ## Near-Term Excellence Targets
 
-1. Close remaining gas-rule edge cases with strict goldens.
+1. Finish gas-rule closure (refund/accounting edge cases) with strict goldens.
 2. Complete transaction-scoped journal/snapshot model.
 3. Increase differential corpus breadth and enforce regression failure.
-4. Keep documentation and CI artifacts synchronized by default.
+4. Expand consensus/reference harness coverage without weakening deterministic CI gates.
+5. Keep documentation and CI artifacts synchronized by default.

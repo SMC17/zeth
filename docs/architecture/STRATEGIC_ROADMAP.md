@@ -1,4 +1,6 @@
-# Strategic Analysis: ewasm and Zig EVM Implementation Path
+# Archived Strategic Analysis: ewasm and Zig EVM Implementation Path
+
+> Archived reference: historical strategic analysis. For current execution order and measured status, use `docs/community/EXECUTION_BACKLOG.md` and `STATUS_SUMMARY.md`.
 
 ## Understanding ewasm
 
@@ -395,4 +397,3 @@ The path to a sophisticated Zig EVM implementation and potential blockchain spin
 - [ewasm GitHub Organization](https://github.com/ewasm)
 - [Hera VM Implementation](https://github.com/ewasm/hera)
 - [Ewasm Design Specification](https://github.com/ewasm/design)
-
