@@ -645,6 +645,59 @@ test "EVM: BALANCE/EXTCODE*/EXTCODEHASH treat precompile addresses as warm" {
     try testing.expectEqual(@as(u64, 309), vm.gas_used);
 }
 
+test "EVM: BALANCE/EXTCODE*/EXTCODEHASH use full PUSH20 address bytes consistently" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    const target = types.Address{ .bytes = [_]u8{
+        0x11, 0x22, 0x33, 0x44, 0x55,
+        0x66, 0x77, 0x88, 0x99, 0xaa,
+        0xbb, 0xcc, 0xdd, 0xee, 0xf0,
+        0x01, 0x23, 0x45, 0x67, 0x89,
+    } };
+    const code = [_]u8{ 0x60, 0x2a, 0x00 };
+    try db.createAccount(target);
+    try db.setBalance(target, types.U256.fromU64(0x1234));
+    try db.setCode(target, &code);
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const bytecode = [_]u8{
+        0x73, // PUSH20
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa,
+        0xbb, 0xcc, 0xdd, 0xee, 0xf0, 0x01, 0x23, 0x45, 0x67, 0x89,
+        0x31, // BALANCE (cold)
+        0x73, // PUSH20
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa,
+        0xbb, 0xcc, 0xdd, 0xee, 0xf0, 0x01, 0x23, 0x45, 0x67, 0x89,
+        0x3b, // EXTCODESIZE (warm)
+        0x73, // PUSH20
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa,
+        0xbb, 0xcc, 0xdd, 0xee, 0xf0, 0x01, 0x23, 0x45, 0x67, 0x89,
+        0x3f, // EXTCODEHASH (warm)
+    };
+
+    _ = try vm.execute(&bytecode, &[_]u8{});
+
+    const hash_u256 = try vm.stack.pop();
+    const size_u256 = try vm.stack.pop();
+    const balance_u256 = try vm.stack.pop();
+
+    try testing.expectEqual(@as(u64, 0x1234), balance_u256.limbs[0]);
+    try testing.expectEqual(@as(u64, 3), size_u256.limbs[0]);
+
+    var expected_hash: [32]u8 = undefined;
+    @import("crypto").keccak256(&code, &expected_hash);
+    try testing.expectEqualSlices(u8, &expected_hash, &hash_u256.toBytes());
+
+    // 3 PUSH20 (9) + BALANCE cold (2600) + EXTCODESIZE warm (100) + EXTCODEHASH warm (100)
+    try testing.expectEqual(@as(u64, 2_809), vm.gas_used);
+}
+
 test "EVM: CALL dispatches SHA256 precompile (0x02)" {
     const testing = std.testing;
     const allocator = testing.allocator;
