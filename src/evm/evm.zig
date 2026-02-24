@@ -1895,7 +1895,9 @@ pub const EVM = struct {
         const length = length_u256.limbs[0];
 
         // Calculate required memory size
-        const new_size = if (length > 0 and mem_offset < 0xFFFFFFFFFFFFFFFF)
+        const new_size = if (length == 0)
+            self.memory.data.items.len
+        else if (mem_offset < 0xFFFFFFFFFFFFFFFF)
             @min(mem_offset + length, 0xFFFFFFFF)
         else
             mem_offset;
@@ -1947,7 +1949,9 @@ pub const EVM = struct {
         const length = length_u256.limbs[0];
 
         // Calculate required memory size
-        const new_size = if (length > 0 and mem_offset < 0xFFFFFFFFFFFFFFFF)
+        const new_size = if (length == 0)
+            self.memory.data.items.len
+        else if (mem_offset < 0xFFFFFFFFFFFFFFFF)
             @min(mem_offset + length, 0xFFFFFFFF)
         else
             mem_offset;
@@ -2036,8 +2040,10 @@ pub const EVM = struct {
         const mem_offset = mem_offset_u256.limbs[0];
         const length = length_u256.limbs[0];
 
-        // Calculate required memory size
-        const new_size = if (length > 0 and mem_offset < 0xFFFFFFFFFFFFFFFF)
+        // Zero-length copies must not expand memory.
+        const new_size = if (length == 0)
+            self.memory.data.items.len
+        else if (mem_offset < 0xFFFFFFFFFFFFFFFF)
             @min(mem_offset + length, 0xFFFFFFFF)
         else
             mem_offset;

@@ -613,6 +613,42 @@ test "EVM: EXTCODECOPY zero-fills beyond code and warms account for subsequent E
     try testing.expectEqual(@as(u64, 2_739), vm.gas_used);
 }
 
+test "EVM: EXTCODECOPY length zero does not expand memory and still warms account" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var target = types.Address.zero;
+    target.bytes[19] = 0x0b;
+    try db.createAccount(target);
+    try db.setCode(target, &[_]u8{0xaa});
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+    const initial_mem_len = vm.memory.data.items.len;
+
+    const bytecode = [_]u8{
+        0x60, 0x00, // len = 0
+        0x60, 0x00, // codeOffset
+        0x61, 0x01, 0x00, // memOffset = 256 (should not matter when len=0)
+        0x60, 0x0b, // addr
+        0x3c, // EXTCODECOPY (cold)
+        0x60, 0x0b, // addr
+        0x3b, // EXTCODESIZE (warm)
+    };
+
+    _ = try vm.execute(&bytecode, &[_]u8{});
+    const size_u256 = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), size_u256.limbs[0]);
+    try testing.expectEqual(initial_mem_len, vm.memory.data.items.len);
+
+    // PUSH1 + PUSH1 + PUSH2 + PUSH1 + EXTCODECOPY(cold, len=0 no mem/copy cost) + PUSH1 + EXTCODESIZE(warm)
+    // = 3 + 3 + 3 + 3 + (20 + 2600) + 3 + 100
+    try testing.expectEqual(@as(u64, 2_735), vm.gas_used);
+}
+
 test "EVM: BALANCE/EXTCODE*/EXTCODEHASH treat precompile addresses as warm" {
     const testing = std.testing;
     const allocator = testing.allocator;
