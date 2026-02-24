@@ -649,6 +649,69 @@ test "EVM: EXTCODECOPY length zero does not expand memory and still warms accoun
     try testing.expectEqual(@as(u64, 2_735), vm.gas_used);
 }
 
+test "EVM: CALLDATACOPY length zero does not expand memory and charges no copy/mem gas" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1_000_000);
+    defer vm.deinit();
+    const initial_mem_len = vm.memory.data.items.len;
+
+    const bytecode = [_]u8{
+        0x60, 0x00, // len = 0
+        0x60, 0x00, // calldataOffset
+        0x61, 0x01, 0x00, // memOffset = 256 (must not expand when len=0)
+        0x37, // CALLDATACOPY
+    };
+
+    _ = try vm.execute(&bytecode, &[_]u8{ 0xaa, 0xbb, 0xcc });
+    try testing.expectEqual(initial_mem_len, vm.memory.data.items.len);
+    // PUSH1 + PUSH1 + PUSH2 + CALLDATACOPY(base=3, no mem/copy cost)
+    try testing.expectEqual(@as(u64, 12), vm.gas_used);
+}
+
+test "EVM: CODECOPY length zero does not expand memory and charges no copy/mem gas" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1_000_000);
+    defer vm.deinit();
+    const initial_mem_len = vm.memory.data.items.len;
+
+    const bytecode = [_]u8{
+        0x60, 0x00, // len = 0
+        0x60, 0x00, // codeOffset
+        0x61, 0x01, 0x00, // memOffset = 256 (must not expand when len=0)
+        0x39, // CODECOPY
+    };
+
+    _ = try vm.execute(&bytecode, &[_]u8{});
+    try testing.expectEqual(initial_mem_len, vm.memory.data.items.len);
+    // PUSH1 + PUSH1 + PUSH2 + CODECOPY(base=3, no mem/copy cost)
+    try testing.expectEqual(@as(u64, 12), vm.gas_used);
+}
+
+test "EVM: RETURNDATACOPY length zero does not expand memory and charges no copy/mem gas" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1_000_000);
+    defer vm.deinit();
+    const initial_mem_len = vm.memory.data.items.len;
+
+    const bytecode = [_]u8{
+        0x60, 0x00, // len = 0
+        0x60, 0x00, // returnDataOffset
+        0x61, 0x01, 0x00, // memOffset = 256 (must not expand when len=0)
+        0x3e, // RETURNDATACOPY
+    };
+
+    _ = try vm.execute(&bytecode, &[_]u8{});
+    try testing.expectEqual(initial_mem_len, vm.memory.data.items.len);
+    // PUSH1 + PUSH1 + PUSH2 + RETURNDATACOPY(base=3, no mem/copy cost)
+    try testing.expectEqual(@as(u64, 12), vm.gas_used);
+}
+
 test "EVM: BALANCE/EXTCODE*/EXTCODEHASH treat precompile addresses as warm" {
     const testing = std.testing;
     const allocator = testing.allocator;

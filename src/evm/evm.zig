@@ -2937,11 +2937,14 @@ pub const EVM = struct {
             return error.Revert; // Out of bounds access
         }
 
-        // Calculate required memory size
-        const new_size = if (length > 0 and mem_offset < 0xFFFFFFFFFFFFFFFF)
+        // Zero-length copies must not expand memory.
+        const new_size = if (length == 0)
+            self.memory.data.items.len
+        else if (mem_offset < 0xFFFFFFFFFFFFFFFF)
             @min(mem_offset + length, 0xFFFFFFFF)
         else
             mem_offset;
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
@@ -2954,7 +2957,6 @@ pub const EVM = struct {
         }
 
         // Gas cost: 3 base + memory expansion + copy cost
-        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         const copy_cost = (length + 31) / 32; // Words to copy (minimum 1)
         self.gas_used += 3 + mem_cost + copy_cost;
     }
