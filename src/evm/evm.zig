@@ -2212,6 +2212,7 @@ pub const EVM = struct {
 
     // LOG opcodes
     fn opLog(self: *EVM, topic_count: usize) !void {
+        if (self.is_static) return error.StaticStateChange;
         const offset = try self.stack.pop();
         const length = try self.stack.pop();
 
@@ -2401,6 +2402,7 @@ pub const EVM = struct {
         const args_length = try self.stack.pop();
         const ret_offset = try self.stack.pop();
         const ret_length = try self.stack.pop();
+        if (self.is_static and !value.isZero()) return error.StaticStateChange;
 
         const target = u256ToAddress(address_u256);
         var base_gas: u64 = 700 + try self.accountAccessCost(target);
@@ -2462,6 +2464,7 @@ pub const EVM = struct {
         const args_length = try self.stack.pop();
         const ret_offset = try self.stack.pop();
         const ret_length = try self.stack.pop();
+        if (self.is_static and !value.isZero()) return error.StaticStateChange;
 
         const code_addr = u256ToAddress(address_u256);
         var base_gas: u64 = 700 + try self.accountAccessCost(code_addr);
@@ -2512,6 +2515,7 @@ pub const EVM = struct {
 
     // CREATE opcodes
     fn opCreate(self: *EVM) anyerror!void {
+        if (self.is_static) return error.StaticStateChange;
         const value = try self.stack.pop();
         const offset = try self.stack.pop();
         const length = try self.stack.pop();
@@ -2596,6 +2600,7 @@ pub const EVM = struct {
     }
 
     fn opCreate2(self: *EVM) anyerror!void {
+        if (self.is_static) return error.StaticStateChange;
         const value = try self.stack.pop();
         const offset = try self.stack.pop();
         const length = try self.stack.pop();
@@ -2680,6 +2685,7 @@ pub const EVM = struct {
 
     // SELFDESTRUCT opcode
     fn opSelfDestruct(self: *EVM) !void {
+        if (self.is_static) return error.StaticStateChange;
         const beneficiary = try self.stack.pop();
         const beneficiary_address = u256ToAddress(beneficiary);
         var selfdestruct_gas: u64 = 5000 + try self.accountAccessCost(beneficiary_address);

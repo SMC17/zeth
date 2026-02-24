@@ -1301,6 +1301,151 @@ test "EVM: STATICCALL forbids SSTORE and reverts callee state changes" {
     try testing.expect(stored.isZero());
 }
 
+test "EVM: STATICCALL forbids LOG0 and emits no logs" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var callee_addr = types.Address.zero;
+    callee_addr.bytes[19] = 0x0c;
+    const callee_code = [_]u8{
+        0x60, 0x00, // offset
+        0x60, 0x00, // length
+        0xa0, // LOG0
+        0x00, // STOP
+    };
+    try db.createAccount(callee_addr);
+    try db.setCode(callee_addr, &callee_code);
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x0c, // address
+        0x61, 0xff, 0xff, // gas
+        0xfa, // STATICCALL
+    };
+
+    _ = try vm.execute(&code, &[_]u8{});
+    const success = try vm.stack.pop();
+    try testing.expect(success.isZero());
+    try testing.expectEqual(@as(usize, 0), vm.logs.items.len);
+}
+
+test "EVM: STATICCALL forbids CREATE and CREATE2" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var callee_addr = types.Address.zero;
+    callee_addr.bytes[19] = 0x0d;
+    const callee_code = [_]u8{
+        0x60, 0x00, // value
+        0x60, 0x00, // offset
+        0x60, 0x00, // length
+        0xf0, // CREATE (must fail under static)
+        0x60, 0x00, // value
+        0x60, 0x00, // offset
+        0x60, 0x00, // length
+        0x60, 0x01, // salt
+        0xf5, // CREATE2 (must fail under static if reached)
+        0x00, // STOP
+    };
+    try db.createAccount(callee_addr);
+    try db.setCode(callee_addr, &callee_code);
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, // out/in zero
+        0x60, 0x0d, // address
+        0x61, 0xff, 0xff, // gas
+        0xfa, // STATICCALL
+    };
+
+    _ = try vm.execute(&code, &[_]u8{});
+    const success = try vm.stack.pop();
+    try testing.expect(success.isZero());
+}
+
+test "EVM: STATICCALL forbids SELFDESTRUCT" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var callee_addr = types.Address.zero;
+    callee_addr.bytes[19] = 0x0e;
+    try db.createAccount(callee_addr);
+    try db.setBalance(callee_addr, types.U256.fromU64(77));
+    const callee_code = [_]u8{
+        0x60, 0x01, // beneficiary
+        0xff, // SELFDESTRUCT
+    };
+    try db.setCode(callee_addr, &callee_code);
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00,
+        0x60, 0x0e, 0x61, 0xff, 0xff, 0xfa,
+    };
+
+    _ = try vm.execute(&code, &[_]u8{});
+    const success = try vm.stack.pop();
+    try testing.expect(success.isZero());
+    try testing.expect(db.exists(callee_addr));
+    const bal = try db.getBalance(callee_addr);
+    try testing.expectEqual(@as(u64, 77), bal.limbs[0]);
+}
+
+test "EVM: STATICCALL forbids value-carrying CALL" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var callee_addr = types.Address.zero;
+    callee_addr.bytes[19] = 0x0f;
+    const callee_code = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x01, // value (forbidden under static)
+        0x60, 0x01, // address
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+        0x00, // STOP
+    };
+    try db.createAccount(callee_addr);
+    try db.setCode(callee_addr, &callee_code);
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00,
+        0x60, 0x0f, 0x61, 0xff, 0xff, 0xfa,
+    };
+
+    _ = try vm.execute(&code, &[_]u8{});
+    const success = try vm.stack.pop();
+    try testing.expect(success.isZero());
+}
+
 test "EVM: DELEGATECALL preserves caller context" {
     const testing = std.testing;
     const allocator = testing.allocator;
