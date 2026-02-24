@@ -2137,6 +2137,13 @@ pub const EVM = struct {
         // BLOCKHASH: Hash of a given block
         // Stack: blockNumber -> hash
         const block_number_u256 = try self.stack.pop();
+        // BLOCKHASH compares the full 256-bit value. Any value above u64 range cannot
+        // match a real block number in this implementation and must return zero.
+        if (block_number_u256.limbs[1] != 0 or block_number_u256.limbs[2] != 0 or block_number_u256.limbs[3] != 0) {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += 20;
+            return;
+        }
         const block_number = block_number_u256.limbs[0];
         const current_block = self.context.block_number;
 

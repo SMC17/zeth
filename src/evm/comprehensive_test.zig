@@ -521,6 +521,31 @@ test "EVM: BLOCKHASH returns configured hash at 256-block boundary with exact ga
     try testing.expectEqual(@as(u64, 23), vm.gas_used); // PUSH1 + BLOCKHASH
 }
 
+test "EVM: BLOCKHASH ignores low limb when high limbs are non-zero" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var context = evm.ExecutionContext.default();
+    context.block_number = 300;
+    var vm = try evm.EVM.initWithContext(allocator, 1_000_000, context);
+    defer vm.deinit();
+
+    var hbytes = [_]u8{0} ** 32;
+    hbytes[31] = 0x99;
+    try vm.setBlockHash(299, types.Hash{ .bytes = hbytes });
+
+    const bytecode = [_]u8{
+        0x68, // PUSH9
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x2b, // 2^64 + 299
+        0x40, // BLOCKHASH
+    };
+
+    _ = try vm.execute(&bytecode, &[_]u8{});
+    const result = try vm.stack.pop();
+    try testing.expect(result.isZero());
+    try testing.expectEqual(@as(u64, 23), vm.gas_used); // PUSH9 + BLOCKHASH
+}
+
 test "EVM: SELFBALANCE returns current account balance with fixed gas" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -586,6 +611,38 @@ test "EVM: EXTCODECOPY zero-fills beyond code and warms account for subsequent E
 
     // 5 PUSH1 (15) + EXTCODECOPY cold (20 + mem(3) + copy(1) + 2600) + EXTCODESIZE warm (100)
     try testing.expectEqual(@as(u64, 2_739), vm.gas_used);
+}
+
+test "EVM: BALANCE/EXTCODE*/EXTCODEHASH treat precompile addresses as warm" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const bytecode = [_]u8{
+        0x60, 0x02, // PUSH1 precompile address 0x02
+        0x31, // BALANCE (precompile, warm by EIP-2929)
+        0x60, 0x02, // PUSH1 precompile address 0x02
+        0x3b, // EXTCODESIZE (precompile, warm)
+        0x60, 0x02, // PUSH1 precompile address 0x02
+        0x3f, // EXTCODEHASH (precompile, warm; nonexistent in empty db => 0)
+    };
+
+    _ = try vm.execute(&bytecode, &[_]u8{});
+
+    const extcodehash = try vm.stack.pop();
+    const extcodesize = try vm.stack.pop();
+    const balance = try vm.stack.pop();
+    try testing.expect(extcodehash.isZero());
+    try testing.expect(extcodesize.isZero());
+    try testing.expect(balance.isZero());
+
+    // 3 PUSH1 (9) + three warm account accesses (3 * 100)
+    try testing.expectEqual(@as(u64, 309), vm.gas_used);
 }
 
 test "EVM: CALL dispatches SHA256 precompile (0x02)" {
