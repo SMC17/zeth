@@ -1898,6 +1898,7 @@ pub const EVM = struct {
             @min(mem_offset + length, 0xFFFFFFFF)
         else
             mem_offset;
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
@@ -1924,7 +1925,6 @@ pub const EVM = struct {
         }
 
         // Gas cost: 3 base + memory expansion + copy cost
-        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         const copy_cost = (length + 31) / 32; // Words to copy (minimum 1)
         self.gas_used += 3 + mem_cost + copy_cost;
     }
@@ -1950,6 +1950,7 @@ pub const EVM = struct {
             @min(mem_offset + length, 0xFFFFFFFF)
         else
             mem_offset;
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
@@ -1976,7 +1977,6 @@ pub const EVM = struct {
         }
 
         // Gas cost: 3 base + memory expansion + copy cost
-        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         const copy_cost = (length + 31) / 32; // Words to copy (minimum 1)
         self.gas_used += 3 + mem_cost + copy_cost;
     }
@@ -2040,6 +2040,7 @@ pub const EVM = struct {
             @min(mem_offset + length, 0xFFFFFFFF)
         else
             mem_offset;
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
 
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
@@ -2065,7 +2066,6 @@ pub const EVM = struct {
         }
 
         // Gas cost: 20 base + account access (EIP-2929) + memory expansion + copy cost
-        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
         const copy_cost = (length + 31) / 32; // Words to copy (minimum 1)
         self.gas_used += 20 + mem_cost + copy_cost + try self.accountAccessCost(address);
     }

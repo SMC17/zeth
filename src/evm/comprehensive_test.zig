@@ -496,6 +496,98 @@ test "EVM: BLOCKHASH returns zero outside 256-block window" {
     try testing.expect(result.isZero());
 }
 
+test "EVM: BLOCKHASH returns configured hash at 256-block boundary with exact gas" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var context = evm.ExecutionContext.default();
+    context.block_number = 300;
+    var vm = try evm.EVM.initWithContext(allocator, 1_000_000, context);
+    defer vm.deinit();
+
+    var hbytes = [_]u8{0} ** 32;
+    hbytes[0] = 0xaa;
+    hbytes[31] = 0x55;
+    try vm.setBlockHash(44, types.Hash{ .bytes = hbytes }); // distance = 256
+
+    const bytecode = [_]u8{
+        0x60, 0x2c, // PUSH1 44
+        0x40, // BLOCKHASH
+    };
+
+    _ = try vm.execute(&bytecode, &[_]u8{});
+    const result = try vm.stack.pop();
+    try testing.expect(result.eq(types.U256.fromBytes(hbytes)));
+    try testing.expectEqual(@as(u64, 23), vm.gas_used); // PUSH1 + BLOCKHASH
+}
+
+test "EVM: SELFBALANCE returns current account balance with fixed gas" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var self_addr = types.Address.zero;
+    self_addr.bytes[19] = 0x77;
+    try db.createAccount(self_addr);
+    try db.setBalance(self_addr, types.U256.fromU64(1234));
+
+    var context = evm.ExecutionContext.default();
+    context.address = self_addr;
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, context, &db);
+    defer vm.deinit();
+
+    const bytecode = [_]u8{
+        0x47, // SELFBALANCE
+    };
+
+    _ = try vm.execute(&bytecode, &[_]u8{});
+    const result = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1234), result.limbs[0]);
+    try testing.expectEqual(@as(u64, 5), vm.gas_used);
+}
+
+test "EVM: EXTCODECOPY zero-fills beyond code and warms account for subsequent EXTCODESIZE" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var target = types.Address.zero;
+    target.bytes[19] = 0x0a;
+    const code = [_]u8{ 0xaa, 0xbb };
+    try db.createAccount(target);
+    try db.setCode(target, &code);
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const bytecode = [_]u8{
+        0x60, 0x04, // len
+        0x60, 0x01, // codeOffset
+        0x60, 0x00, // memOffset
+        0x60, 0x0a, // addr
+        0x3c, // EXTCODECOPY (cold)
+        0x60, 0x0a, // addr
+        0x3b, // EXTCODESIZE (warm)
+    };
+
+    _ = try vm.execute(&bytecode, &[_]u8{});
+    const size_u256 = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 2), size_u256.limbs[0]);
+
+    try testing.expectEqual(@as(u8, 0xbb), vm.memory.data.items[0]);
+    try testing.expectEqual(@as(u8, 0x00), vm.memory.data.items[1]);
+    try testing.expectEqual(@as(u8, 0x00), vm.memory.data.items[2]);
+    try testing.expectEqual(@as(u8, 0x00), vm.memory.data.items[3]);
+
+    // 5 PUSH1 (15) + EXTCODECOPY cold (20 + mem(3) + copy(1) + 2600) + EXTCODESIZE warm (100)
+    try testing.expectEqual(@as(u64, 2_739), vm.gas_used);
+}
+
 test "EVM: CALL dispatches SHA256 precompile (0x02)" {
     const testing = std.testing;
     const allocator = testing.allocator;
