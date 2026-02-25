@@ -1059,6 +1059,122 @@ test "EVM: RETURNDATACOPY non-zero copy charges memory expansion exactly" {
     try testing.expectEqual(@as(u64, 909), vm.gas_used);
 }
 
+test "EVM: RETURNDATACOPY exact-end boundary succeeds with exact gas and bytes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1_000_000);
+    defer vm.deinit();
+
+    // Get 32-byte SHA256("") return data, then copy the final byte only (offset 31, len 1)
+    // into memory offset 0. This is an exact-end boundary read and should succeed.
+    const code = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x02, // SHA256 precompile
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+        0x60, 0x01, // len = 1
+        0x60, 0x1f, // returnDataOffset = 31
+        0x60, 0x00, // memOffset = 0
+        0x3e, // RETURNDATACOPY
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const call_success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), call_success.limbs[0]);
+
+    var expected_sha: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash("", &expected_sha, .{});
+    try testing.expectEqual(expected_sha[31], vm.memory.data.items[0]);
+
+    // CALL pushes = 21
+    // CALL base + SHA256(empty) = 860
+    // RETURNDATACOPY pushes = 9
+    // RETURNDATACOPY op = base 3 + copy 1 + mem expansion 3 (0 -> 1 word) = 7
+    try testing.expectEqual(@as(u64, 897), vm.gas_used);
+}
+
+test "EVM: RETURNDATACOPY out-of-bounds reverts and preserves memory" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1_000_000);
+    defer vm.deinit();
+    try vm.memory.data.resize(32);
+    @memset(vm.memory.data.items[0..32], 0xaa);
+
+    // SHA256("") returns 32 bytes. Copy offset 31, len 2 crosses boundary by 1 byte and must REVERT.
+    const code = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x02, // SHA256 precompile
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+        0x60, 0x02, // len = 2
+        0x60, 0x1f, // returnDataOffset = 31
+        0x60, 0x00, // memOffset = 0
+        0x3e, // RETURNDATACOPY => REVERT
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    try testing.expect(!result.success);
+    try testing.expectEqual(@as(u64, 890), result.gas_used); // fails before RETURNDATACOPY gas is charged
+    try testing.expectEqual(@as(u8, 0xaa), vm.memory.data.items[0]);
+    try testing.expectEqual(@as(u8, 0xaa), vm.memory.data.items[31]);
+}
+
+test "EVM: RETURNDATACOPY zero-length at end boundary succeeds without revert" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1_000_000);
+    defer vm.deinit();
+    const initial_mem_len = vm.memory.data.items.len;
+
+    // returnDataOffset == return_data.len with len=0 is valid.
+    const code = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x00, // value
+        0x60, 0x02, // SHA256 precompile
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+        0x60, 0x00, // len = 0
+        0x60, 0x20, // returnDataOffset = 32 == end boundary
+        0x61, 0x01, 0x00, // memOffset (ignored for len=0)
+        0x3e, // RETURNDATACOPY
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const call_success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), call_success.limbs[0]);
+    try testing.expectEqual(initial_mem_len, vm.memory.data.items.len);
+
+    // CALL pushes = 21
+    // CALL base + SHA256(empty) = 860
+    // RETURNDATACOPY pushes = 9
+    // RETURNDATACOPY op = base 3, no copy, no mem expansion
+    try testing.expectEqual(@as(u64, 893), vm.gas_used);
+}
+
 test "EVM: IDENTITY precompile fails with OOG and consumes forwarded gas" {
     const testing = std.testing;
     const allocator = testing.allocator;
