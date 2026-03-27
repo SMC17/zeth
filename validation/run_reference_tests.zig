@@ -13,6 +13,31 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    var discrepancy_txt_path: []const u8 = "/tmp/zeth_discrepancies.txt";
+    var discrepancy_json_path: []const u8 = "/tmp/zeth_discrepancies.json";
+    var summary_json_path: ?[]const u8 = null;
+    var require_reference = false;
+    var baseline_json_path: ?[]const u8 = null;
+    var fail_on_regression = false;
+
+    var args = std.process.args();
+    _ = args.skip();
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--discrepancy-out")) {
+            if (args.next()) |p| discrepancy_txt_path = p;
+        } else if (std.mem.eql(u8, arg, "--discrepancy-json")) {
+            if (args.next()) |p| discrepancy_json_path = p;
+        } else if (std.mem.eql(u8, arg, "--summary-json")) {
+            if (args.next()) |p| summary_json_path = p;
+        } else if (std.mem.eql(u8, arg, "--require-reference")) {
+            require_reference = true;
+        } else if (std.mem.eql(u8, arg, "--baseline-json")) {
+            if (args.next()) |p| baseline_json_path = p;
+        } else if (std.mem.eql(u8, arg, "--fail-on-regression")) {
+            fail_on_regression = true;
+        }
+    }
+
     std.debug.print("Zeth Reference Comparison Test Runner\n", .{});
     std.debug.print("=====================================\n\n", .{});
 
@@ -50,12 +75,25 @@ pub fn main() !void {
         defer prepared.deinit(allocator);
 
         // Execute on our EVM
-        var our_result = try comparison.executeOurEVM(allocator, prepared.code, prepared.calldata, 1000000);
+        var our_result = try comparison.executeOurEVMWithPrestate(
+            allocator,
+            prepared.code,
+            prepared.calldata,
+            1000000,
+            test_case.pre_storage,
+            test_case.tracked_storage,
+        );
         defer our_result.deinit(allocator);
 
         // Try reference if available
         if (pyevm_available) {
-            var ref_result = reference.executeWithPyEVM(allocator, prepared.code, prepared.calldata) catch |err| {
+            var ref_result = reference.executeWithPyEVM(
+                allocator,
+                prepared.code,
+                prepared.calldata,
+                test_case.pre_storage,
+                test_case.tracked_storage,
+            ) catch |err| {
                 std.debug.print("ERROR (reference failed: {})\n", .{err});
                 continue;
             };
@@ -70,6 +108,8 @@ pub fn main() !void {
                 .success = ref_result.success,
                 .return_data = ref_result.return_data,
                 .gas_used = ref_result.gas_used,
+                .stack = ref_result.stack,
+                .storage = ref_result.storage,
             };
 
             try comparison.compareResults(allocator, &our_result, ref_wrapped);
@@ -120,11 +160,38 @@ pub fn main() !void {
     if (test_runner.discrepancy_tracker.count() > 0) {
         std.debug.print("\n", .{});
         std.debug.print("Discrepancies found: {}\n", .{test_runner.discrepancy_tracker.count()});
-        try test_runner.discrepancy_tracker.saveToFile("/tmp/zeth_discrepancies.txt");
-        std.debug.print("Report saved to: /tmp/zeth_discrepancies.txt\n", .{});
+        try test_runner.discrepancy_tracker.saveToFile(discrepancy_txt_path);
+        try test_runner.discrepancy_tracker.saveJsonToFile(discrepancy_json_path);
+        std.debug.print("Report saved to: {s}\n", .{discrepancy_txt_path});
+        std.debug.print("JSON report saved to: {s}\n", .{discrepancy_json_path});
     } else {
         std.debug.print("\n", .{});
         std.debug.print("No discrepancies found!\n", .{});
+        var empty_tracker = try tracker.DiscrepancyTracker.init(allocator);
+        defer empty_tracker.deinit();
+        try empty_tracker.saveToFile(discrepancy_txt_path);
+        try empty_tracker.saveJsonToFile(discrepancy_json_path);
+    }
+
+    if (summary_json_path) |path| {
+        const summary = .{
+            .tests_run = tests_run,
+            .tests_passed = tests_passed,
+            .tests_failed = tests_run - tests_passed,
+            .reference_available = pyevm_available or geth_available,
+            .pyevm_available = pyevm_available,
+            .geth_available = geth_available,
+            .discrepancy_count = test_runner.discrepancy_tracker.count(),
+            .generated_at = std.time.timestamp(),
+        };
+        const file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+        defer file.close();
+        try std.json.stringify(summary, .{ .whitespace = .indent_2 }, file.writer());
+    }
+
+    if (fail_on_regression) {
+        if (baseline_json_path == null) return error.MissingBaseline;
+        try enforceDiscrepancyBaseline(allocator, baseline_json_path.?, &test_runner.discrepancy_tracker);
     }
 
     // Strict gate: if reference implementation is available, any mismatch fails.
@@ -132,5 +199,51 @@ pub fn main() !void {
         if (tests_passed != tests_run or test_runner.discrepancy_tracker.count() > 0) {
             return error.ReferenceMismatch;
         }
+    } else if (require_reference) {
+        return error.ReferenceUnavailable;
+    }
+}
+
+fn buildDiscrepancyKey(allocator: std.mem.Allocator, opcode: []const u8, disc_type: []const u8, description: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}|{s}|{s}", .{ opcode, disc_type, description });
+}
+
+fn enforceDiscrepancyBaseline(allocator: std.mem.Allocator, baseline_path: []const u8, current: *const tracker.DiscrepancyTracker) !void {
+    const content = try std.fs.cwd().readFileAlloc(allocator, baseline_path, 4 * 1024 * 1024);
+    defer allocator.free(content);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, content, .{});
+    defer parsed.deinit();
+
+    const root = parsed.value.object;
+    const summary = root.get("summary") orelse return error.InvalidBaseline;
+    const baseline_total: usize = @intCast(summary.object.get("total").?.integer);
+
+    var baseline_keys = std.StringHashMap(void).init(allocator);
+    defer {
+        var it = baseline_keys.keyIterator();
+        while (it.next()) |key| allocator.free(key.*);
+        baseline_keys.deinit();
+    }
+
+    if (root.get("discrepancies")) |discrepancies_val| {
+        for (discrepancies_val.array.items) |disc_val| {
+            const disc = disc_val.object;
+            const key = try buildDiscrepancyKey(
+                allocator,
+                disc.get("opcode").?.string,
+                disc.get("type").?.string,
+                disc.get("description").?.string,
+            );
+            try baseline_keys.put(key, {});
+        }
+    }
+
+    if (current.count() > baseline_total) return error.DiscrepancyRegression;
+
+    for (current.discrepancies.items) |disc| {
+        const key = try buildDiscrepancyKey(allocator, disc.opcode, @tagName(disc.type), disc.description);
+        defer allocator.free(key);
+        if (!baseline_keys.contains(key)) return error.DiscrepancyRegression;
     }
 }

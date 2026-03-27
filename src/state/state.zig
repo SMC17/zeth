@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("types");
 const crypto = @import("crypto");
+const rlp = @import("rlp");
 
 /// State database that manages account states and storage
 pub const StateDB = struct {
@@ -8,7 +9,8 @@ pub const StateDB = struct {
     accounts: std.AutoHashMap(types.Address, types.Account),
     storage: std.AutoHashMap(StorageKey, types.U256),
     code: std.AutoHashMap(types.Address, []u8),
-    snapshots: std.ArrayList(Snapshot),
+    journal: std.ArrayList(JournalEntry),
+    checkpoints: std.ArrayList(usize),
 
     pub fn init(allocator: std.mem.Allocator) StateDB {
         return StateDB{
@@ -16,15 +18,17 @@ pub const StateDB = struct {
             .accounts = std.AutoHashMap(types.Address, types.Account).init(allocator),
             .storage = std.AutoHashMap(StorageKey, types.U256).init(allocator),
             .code = std.AutoHashMap(types.Address, []u8).init(allocator),
-            .snapshots = std.ArrayList(Snapshot).init(allocator),
+            .journal = std.ArrayList(JournalEntry).init(allocator),
+            .checkpoints = std.ArrayList(usize).init(allocator),
         };
     }
 
     pub fn deinit(self: *StateDB) void {
-        for (self.snapshots.items) |*snap| {
-            snap.deinit(self.allocator);
+        for (self.journal.items) |*entry| {
+            entry.deinit(self.allocator);
         }
-        self.snapshots.deinit();
+        self.journal.deinit();
+        self.checkpoints.deinit();
         var code_iter = self.code.iterator();
         while (code_iter.next()) |entry| {
             self.allocator.free(entry.value_ptr.*);
@@ -39,7 +43,8 @@ pub const StateDB = struct {
     }
 
     pub fn setAccount(self: *StateDB, address: types.Address, account: types.Account) !void {
-        try self.accounts.put(address, account);
+        try self.recordAccountChange(address);
+        try self.setAccountNoJournal(address, account);
     }
 
     pub fn getBalance(self: *StateDB, address: types.Address) !types.U256 {
@@ -71,6 +76,7 @@ pub const StateDB = struct {
 
     pub fn setStorage(self: *StateDB, address: types.Address, key: types.U256, value: types.U256) !void {
         const storage_key = StorageKey{ .address = address, .key = key };
+        try self.recordStorageChange(storage_key);
         try self.storage.put(storage_key, value);
     }
 
@@ -89,28 +95,14 @@ pub const StateDB = struct {
     }
 
     pub fn setCode(self: *StateDB, address: types.Address, code_bytes: []const u8) !void {
-        const new_code = try self.allocator.dupe(u8, code_bytes);
-
-        if (self.code.fetchRemove(address)) |old| {
-            self.allocator.free(old.value);
-        }
-        try self.code.put(address, new_code);
-
-        var account = try self.getAccount(address);
-        if (new_code.len == 0) {
-            account.code_hash = types.Hash.zero;
-        } else {
-            var hash: [32]u8 = undefined;
-            crypto.keccak256(new_code, &hash);
-            account.code_hash = types.Hash{ .bytes = hash };
-        }
-        try self.setAccount(address, account);
+        try self.recordCodeChange(address);
+        try self.recordAccountChange(address);
+        try self.setCodeNoJournal(address, code_bytes);
     }
 
     pub fn destroyAccount(self: *StateDB, address: types.Address) !void {
-        if (self.code.fetchRemove(address)) |old| {
-            self.allocator.free(old.value);
-        }
+        try self.recordAccountChange(address);
+        try self.recordCodeChange(address);
 
         var storage_keys = std.ArrayList(StorageKey).init(self.allocator);
         defer storage_keys.deinit();
@@ -122,91 +114,212 @@ pub const StateDB = struct {
             }
         }
         for (storage_keys.items) |key| {
+            try self.recordStorageChange(key);
             _ = self.storage.remove(key);
         }
 
+        self.removeCodeNoJournal(address);
         _ = self.accounts.remove(address);
     }
 
-    pub fn snapshot(self: *StateDB) !usize {
-        var snap = Snapshot{
-            .accounts = try self.cloneAccounts(),
-            .storage = try self.cloneStorage(),
-            .code = undefined,
-        };
-        errdefer {
-            snap.accounts.deinit();
-            snap.storage.deinit();
+    pub fn computeStorageRoot(self: *StateDB, address: types.Address) !types.Hash {
+        var trie = Trie.init(self.allocator);
+        defer trie.deinit();
+
+        var entries = std.ArrayList(StorageEntry).init(self.allocator);
+        defer entries.deinit();
+
+        var it = self.storage.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.address.eql(address)) {
+                try entries.append(.{
+                    .key = entry.key_ptr.key,
+                    .value = entry.value_ptr.*,
+                });
+            }
         }
-        snap.code = try self.cloneCode();
-        try self.snapshots.append(snap);
-        return self.snapshots.items.len - 1;
+
+        std.mem.sort(StorageEntry, entries.items, {}, storageEntryLessThan);
+
+        for (entries.items) |entry| {
+            const key_bytes = entry.key.toBytes();
+            const value_bytes = try encodeU256Rlp(self.allocator, entry.value);
+            defer self.allocator.free(value_bytes);
+            try trie.insert(&key_bytes, value_bytes);
+        }
+
+        return trie.hash();
+    }
+
+    pub fn computeStateRoot(self: *StateDB) !types.Hash {
+        var trie = Trie.init(self.allocator);
+        defer trie.deinit();
+
+        var addresses = std.ArrayList(types.Address).init(self.allocator);
+        defer addresses.deinit();
+
+        var it = self.accounts.iterator();
+        while (it.next()) |entry| {
+            try addresses.append(entry.key_ptr.*);
+        }
+        std.mem.sort(types.Address, addresses.items, {}, addressLessThan);
+
+        for (addresses.items) |address| {
+            var account = try self.getAccount(address);
+            account.storage_root = try self.computeStorageRoot(address);
+            const account_bytes = try encodeAccountRlp(self.allocator, account);
+            defer self.allocator.free(account_bytes);
+            try trie.insert(&address.bytes, account_bytes);
+        }
+
+        return trie.hash();
+    }
+
+    pub fn snapshot(self: *StateDB) !usize {
+        try self.checkpoints.append(self.journal.items.len);
+        return self.checkpoints.items.len - 1;
     }
 
     pub fn commitSnapshot(self: *StateDB, snapshot_id: usize) !void {
-        if (snapshot_id + 1 != self.snapshots.items.len) return error.InvalidSnapshot;
-        var snap = self.snapshots.pop().?;
-        snap.deinit(self.allocator);
+        if (snapshot_id + 1 != self.checkpoints.items.len) return error.InvalidSnapshot;
+        _ = self.checkpoints.pop();
+        if (self.checkpoints.items.len == 0) {
+            self.clearJournal();
+        }
     }
 
     pub fn revertToSnapshot(self: *StateDB, snapshot_id: usize) !void {
-        if (snapshot_id + 1 != self.snapshots.items.len) return error.InvalidSnapshot;
-        const snap = self.snapshots.pop().?;
+        if (snapshot_id + 1 != self.checkpoints.items.len) return error.InvalidSnapshot;
 
-        var current_code = self.code;
-        deinitCodeMap(&current_code, self.allocator);
-        self.accounts.deinit();
-        self.storage.deinit();
-
-        self.accounts = snap.accounts;
-        self.storage = snap.storage;
-        self.code = snap.code;
+        const checkpoint = self.checkpoints.pop().?;
+        while (self.journal.items.len > checkpoint) {
+            var entry = self.journal.pop().?;
+            defer entry.deinit(self.allocator);
+            switch (entry) {
+                .account => |change| {
+                    if (change.previous) |prev| {
+                        try self.setAccountNoJournal(change.address, prev);
+                    } else {
+                        _ = self.accounts.remove(change.address);
+                    }
+                },
+                .storage => |change| {
+                    if (change.previous) |prev| {
+                        try self.storage.put(change.key, prev);
+                    } else {
+                        _ = self.storage.remove(change.key);
+                    }
+                },
+                .code => |change| {
+                    if (change.previous) |prev| {
+                        try self.setCodeNoJournal(change.address, prev);
+                    } else {
+                        self.removeCodeNoJournal(change.address);
+                        var account = try self.getAccount(change.address);
+                        account.code_hash = types.Hash.zero;
+                        try self.setAccountNoJournal(change.address, account);
+                    }
+                },
+            }
+        }
     }
 
-    fn cloneAccounts(self: *StateDB) !std.AutoHashMap(types.Address, types.Account) {
-        var copy = std.AutoHashMap(types.Address, types.Account).init(self.allocator);
-        errdefer copy.deinit();
-        var it = self.accounts.iterator();
-        while (it.next()) |entry| {
-            try copy.put(entry.key_ptr.*, entry.value_ptr.*);
+    fn clearJournal(self: *StateDB) void {
+        for (self.journal.items) |*entry| {
+            entry.deinit(self.allocator);
         }
-        return copy;
+        self.journal.clearRetainingCapacity();
     }
 
-    fn cloneStorage(self: *StateDB) !std.AutoHashMap(StorageKey, types.U256) {
-        var copy = std.AutoHashMap(StorageKey, types.U256).init(self.allocator);
-        errdefer copy.deinit();
-        var it = self.storage.iterator();
-        while (it.next()) |entry| {
-            try copy.put(entry.key_ptr.*, entry.value_ptr.*);
-        }
-        return copy;
+    fn recordAccountChange(self: *StateDB, address: types.Address) !void {
+        if (self.checkpoints.items.len == 0) return;
+        try self.journal.append(.{
+            .account = .{
+                .address = address,
+                .previous = self.accounts.get(address),
+            },
+        });
     }
 
-    fn cloneCode(self: *StateDB) !std.AutoHashMap(types.Address, []u8) {
-        var copy = std.AutoHashMap(types.Address, []u8).init(self.allocator);
-        errdefer deinitCodeMap(&copy, self.allocator);
+    fn recordStorageChange(self: *StateDB, key: StorageKey) !void {
+        if (self.checkpoints.items.len == 0) return;
+        try self.journal.append(.{
+            .storage = .{
+                .key = key,
+                .previous = self.storage.get(key),
+            },
+        });
+    }
 
-        var it = self.code.iterator();
-        while (it.next()) |entry| {
-            const dup = try self.allocator.dupe(u8, entry.value_ptr.*);
-            errdefer self.allocator.free(dup);
-            try copy.put(entry.key_ptr.*, dup);
+    fn recordCodeChange(self: *StateDB, address: types.Address) !void {
+        if (self.checkpoints.items.len == 0) return;
+        const previous = if (self.code.get(address)) |existing|
+            try self.allocator.dupe(u8, existing)
+        else
+            null;
+        errdefer if (previous) |bytes| self.allocator.free(bytes);
+        try self.journal.append(.{
+            .code = .{
+                .address = address,
+                .previous = previous,
+            },
+        });
+    }
+
+    fn setAccountNoJournal(self: *StateDB, address: types.Address, account: types.Account) !void {
+        try self.accounts.put(address, account);
+    }
+
+    fn removeCodeNoJournal(self: *StateDB, address: types.Address) void {
+        if (self.code.fetchRemove(address)) |old| {
+            self.allocator.free(old.value);
         }
-        return copy;
+    }
+
+    fn setCodeNoJournal(self: *StateDB, address: types.Address, code_bytes: []const u8) !void {
+        const new_code = try self.allocator.dupe(u8, code_bytes);
+        errdefer self.allocator.free(new_code);
+
+        self.removeCodeNoJournal(address);
+        try self.code.put(address, new_code);
+
+        var account = try self.getAccount(address);
+        if (new_code.len == 0) {
+            account.code_hash = types.Hash.zero;
+        } else {
+            var hash: [32]u8 = undefined;
+            crypto.keccak256(new_code, &hash);
+            account.code_hash = types.Hash{ .bytes = hash };
+        }
+        try self.setAccountNoJournal(address, account);
     }
 };
 
-const Snapshot = struct {
-    accounts: std.AutoHashMap(types.Address, types.Account),
-    storage: std.AutoHashMap(StorageKey, types.U256),
-    code: std.AutoHashMap(types.Address, []u8),
+const JournalEntry = union(enum) {
+    account: struct {
+        address: types.Address,
+        previous: ?types.Account,
+    },
+    storage: struct {
+        key: StorageKey,
+        previous: ?types.U256,
+    },
+    code: struct {
+        address: types.Address,
+        previous: ?[]u8,
+    },
 
-    fn deinit(self: *Snapshot, allocator: std.mem.Allocator) void {
-        deinitCodeMap(&self.code, allocator);
-        self.accounts.deinit();
-        self.storage.deinit();
+    fn deinit(self: *JournalEntry, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .code => |change| if (change.previous) |bytes| allocator.free(bytes),
+            else => {},
+        }
     }
+};
+
+const StorageEntry = struct {
+    key: types.U256,
+    value: types.U256,
 };
 
 fn deinitCodeMap(map: *std.AutoHashMap(types.Address, []u8), allocator: std.mem.Allocator) void {
@@ -329,12 +442,69 @@ pub const Trie = struct {
     }
 
     fn hashNode(self: *Trie, node: *Node) types.Hash {
-        _ = self;
-        _ = node;
-        // Simplified - would compute actual Merkle hash
-        return types.Hash.zero;
+        var encoded = std.ArrayList(u8).init(self.allocator);
+        defer encoded.deinit();
+
+        for (node.children) |child| {
+            if (child) |c| {
+                const child_hash = self.hashNode(c);
+                encoded.append(1) catch unreachable;
+                encoded.appendSlice(&child_hash.bytes) catch unreachable;
+            } else {
+                encoded.append(0) catch unreachable;
+            }
+        }
+
+        if (node.value) |value| {
+            encoded.append(1) catch unreachable;
+            var len_buf: [8]u8 = undefined;
+            std.mem.writeInt(u64, &len_buf, value.len, .big);
+            encoded.appendSlice(&len_buf) catch unreachable;
+            encoded.appendSlice(value) catch unreachable;
+        } else {
+            encoded.append(0) catch unreachable;
+        }
+
+        var hash_bytes: [32]u8 = undefined;
+        crypto.keccak256(encoded.items, &hash_bytes);
+        return types.Hash{ .bytes = hash_bytes };
     }
 };
+
+fn storageEntryLessThan(_: void, a: StorageEntry, b: StorageEntry) bool {
+    const a_bytes = a.key.toBytes();
+    const b_bytes = b.key.toBytes();
+    return std.mem.order(u8, &a_bytes, &b_bytes) == .lt;
+}
+
+fn addressLessThan(_: void, a: types.Address, b: types.Address) bool {
+    return std.mem.order(u8, &a.bytes, &b.bytes) == .lt;
+}
+
+fn encodeU256Rlp(allocator: std.mem.Allocator, value: types.U256) ![]u8 {
+    const raw = value.toBytes();
+    var first_non_zero: usize = 0;
+    while (first_non_zero < raw.len and raw[first_non_zero] == 0) : (first_non_zero += 1) {}
+    const minimal = if (first_non_zero == raw.len) &[_]u8{} else raw[first_non_zero..];
+    return rlp.encodeBytes(minimal, allocator);
+}
+
+fn encodeU64Rlp(allocator: std.mem.Allocator, value: u64) ![]u8 {
+    return rlp.encodeU64(value, allocator);
+}
+
+fn encodeAccountRlp(allocator: std.mem.Allocator, account: types.Account) ![]u8 {
+    const nonce = try encodeU64Rlp(allocator, account.nonce);
+    defer allocator.free(nonce);
+    const balance = try encodeU256Rlp(allocator, account.balance);
+    defer allocator.free(balance);
+    const storage_root = try rlp.encodeBytes(&account.storage_root.bytes, allocator);
+    defer allocator.free(storage_root);
+    const code_hash = try rlp.encodeBytes(&account.code_hash.bytes, allocator);
+    defer allocator.free(code_hash);
+    const items = [_][]const u8{ nonce, balance, storage_root, code_hash };
+    return rlp.encodeList(&items, allocator);
+}
 
 test "StateDB account operations" {
     const testing = std.testing;
@@ -476,6 +646,215 @@ test "StateDB snapshot commit keeps changes" {
 
     const balance = try state.getBalance(addr);
     try testing.expectEqual(@as(u64, 2), balance.limbs[0]);
+}
+
+test "StateDB nested snapshot revert restores outer preimage" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var state = StateDB.init(allocator);
+    defer state.deinit();
+
+    var addr = types.Address.zero;
+    addr.bytes[19] = 0x47;
+    const key = types.U256.fromU64(9);
+
+    try state.createAccount(addr);
+    try state.setBalance(addr, types.U256.fromU64(5));
+    try state.setStorage(addr, key, types.U256.fromU64(6));
+
+    const outer = try state.snapshot();
+    try state.setBalance(addr, types.U256.fromU64(7));
+
+    const inner = try state.snapshot();
+    try state.setBalance(addr, types.U256.fromU64(8));
+    try state.setStorage(addr, key, types.U256.fromU64(11));
+    try state.revertToSnapshot(inner);
+
+    try testing.expectEqual(@as(u64, 7), (try state.getBalance(addr)).limbs[0]);
+    try testing.expectEqual(@as(u64, 6), (try state.getStorage(addr, key)).limbs[0]);
+
+    try state.revertToSnapshot(outer);
+    try testing.expectEqual(@as(u64, 5), (try state.getBalance(addr)).limbs[0]);
+    try testing.expectEqual(@as(u64, 6), (try state.getStorage(addr, key)).limbs[0]);
+}
+
+test "StateDB nested snapshot commit preserves inner changes until outer revert" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var state = StateDB.init(allocator);
+    defer state.deinit();
+
+    var addr = types.Address.zero;
+    addr.bytes[19] = 0x48;
+
+    try state.createAccount(addr);
+    try state.setBalance(addr, types.U256.fromU64(1));
+
+    const outer = try state.snapshot();
+    try state.setBalance(addr, types.U256.fromU64(2));
+
+    const inner = try state.snapshot();
+    try state.setBalance(addr, types.U256.fromU64(3));
+    try state.commitSnapshot(inner);
+
+    try testing.expectEqual(@as(u64, 3), (try state.getBalance(addr)).limbs[0]);
+
+    try state.revertToSnapshot(outer);
+    try testing.expectEqual(@as(u64, 1), (try state.getBalance(addr)).limbs[0]);
+}
+
+test "StateDB repeated writes in one snapshot restore original state" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var state = StateDB.init(allocator);
+    defer state.deinit();
+
+    var addr = types.Address.zero;
+    addr.bytes[19] = 0x49;
+    const key = types.U256.fromU64(1);
+
+    try state.createAccount(addr);
+    try state.setBalance(addr, types.U256.fromU64(10));
+    try state.setStorage(addr, key, types.U256.fromU64(20));
+    try state.setCode(addr, &[_]u8{ 0x60, 0x01, 0x00 });
+
+    const sid = try state.snapshot();
+    try state.setBalance(addr, types.U256.fromU64(11));
+    try state.setBalance(addr, types.U256.fromU64(12));
+    try state.setStorage(addr, key, types.U256.fromU64(21));
+    try state.setStorage(addr, key, types.U256.fromU64(22));
+    try state.setCode(addr, &[_]u8{ 0x60, 0x02, 0x00 });
+    try state.setCode(addr, &[_]u8{ 0x60, 0x03, 0x00 });
+
+    try state.revertToSnapshot(sid);
+
+    try testing.expectEqual(@as(u64, 10), (try state.getBalance(addr)).limbs[0]);
+    try testing.expectEqual(@as(u64, 20), (try state.getStorage(addr, key)).limbs[0]);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0x60, 0x01, 0x00 }, state.getCode(addr));
+}
+
+test "StateDB destroyAccount revert restores account code and storage" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var state = StateDB.init(allocator);
+    defer state.deinit();
+
+    var addr = types.Address.zero;
+    addr.bytes[19] = 0x4a;
+    const key_a = types.U256.fromU64(1);
+    const key_b = types.U256.fromU64(2);
+    const original_code = [_]u8{ 0x60, 0xaa, 0x00 };
+
+    try state.createAccount(addr);
+    try state.setBalance(addr, types.U256.fromU64(33));
+    try state.setStorage(addr, key_a, types.U256.fromU64(44));
+    try state.setStorage(addr, key_b, types.U256.fromU64(55));
+    try state.setCode(addr, &original_code);
+
+    const sid = try state.snapshot();
+    try state.destroyAccount(addr);
+    try testing.expect(!state.exists(addr));
+
+    try state.revertToSnapshot(sid);
+
+    try testing.expect(state.exists(addr));
+    try testing.expectEqual(@as(u64, 33), (try state.getBalance(addr)).limbs[0]);
+    try testing.expectEqual(@as(u64, 44), (try state.getStorage(addr, key_a)).limbs[0]);
+    try testing.expectEqual(@as(u64, 55), (try state.getStorage(addr, key_b)).limbs[0]);
+    try testing.expectEqualSlices(u8, &original_code, state.getCode(addr));
+}
+
+test "StateDB storage root is deterministic regardless of insertion order" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var state_a = StateDB.init(allocator);
+    defer state_a.deinit();
+    var state_b = StateDB.init(allocator);
+    defer state_b.deinit();
+
+    var addr = types.Address.zero;
+    addr.bytes[19] = 0x51;
+
+    const entries = [_]StorageEntry{
+        .{ .key = types.U256.fromU64(3), .value = types.U256.fromU64(30) },
+        .{ .key = types.U256.fromU64(1), .value = types.U256.fromU64(10) },
+        .{ .key = types.U256.fromU64(2), .value = types.U256.fromU64(20) },
+    };
+
+    for (entries) |entry| {
+        try state_a.setStorage(addr, entry.key, entry.value);
+    }
+    var i: usize = entries.len;
+    while (i > 0) {
+        i -= 1;
+        const entry = entries[i];
+        try state_b.setStorage(addr, entry.key, entry.value);
+    }
+
+    const root_a = try state_a.computeStorageRoot(addr);
+    const root_b = try state_b.computeStorageRoot(addr);
+    try testing.expect(root_a.eql(root_b));
+    try testing.expect(!root_a.eql(types.Hash.zero));
+}
+
+test "StateDB storage root changes on mutation and restores on revert" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var state = StateDB.init(allocator);
+    defer state.deinit();
+
+    var addr = types.Address.zero;
+    addr.bytes[19] = 0x52;
+    const key = types.U256.fromU64(1);
+
+    const empty_root = try state.computeStorageRoot(addr);
+    try state.setStorage(addr, key, types.U256.fromU64(7));
+    const populated_root = try state.computeStorageRoot(addr);
+    try testing.expect(!empty_root.eql(populated_root));
+
+    const sid = try state.snapshot();
+    try state.setStorage(addr, key, types.U256.fromU64(9));
+    const mutated_root = try state.computeStorageRoot(addr);
+    try testing.expect(!populated_root.eql(mutated_root));
+
+    try state.revertToSnapshot(sid);
+    const reverted_root = try state.computeStorageRoot(addr);
+    try testing.expect(populated_root.eql(reverted_root));
+}
+
+test "StateDB state root changes with account state and restores on revert" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var state = StateDB.init(allocator);
+    defer state.deinit();
+
+    var addr = types.Address.zero;
+    addr.bytes[19] = 0x53;
+    try state.createAccount(addr);
+
+    const empty_root = try state.computeStateRoot();
+
+    try state.setBalance(addr, types.U256.fromU64(99));
+    try state.setStorage(addr, types.U256.fromU64(1), types.U256.fromU64(2));
+    try state.setCode(addr, &[_]u8{ 0x60, 0x2a, 0x00 });
+    const populated_root = try state.computeStateRoot();
+    try testing.expect(!empty_root.eql(populated_root));
+
+    const sid = try state.snapshot();
+    try state.setBalance(addr, types.U256.fromU64(100));
+    const mutated_root = try state.computeStateRoot();
+    try testing.expect(!populated_root.eql(mutated_root));
+
+    try state.revertToSnapshot(sid);
+    const reverted_root = try state.computeStateRoot();
+    try testing.expect(populated_root.eql(reverted_root));
 }
 
 test "Trie insert and get" {

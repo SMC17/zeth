@@ -52,6 +52,33 @@ fn parseAddress(hex: []const u8) !types.Address {
     return types.Address{ .bytes = buf };
 }
 
+fn applyEnvToContext(ctx: *evm.ExecutionContext, env_val: std.json.Value) !void {
+    const env = env_val.object;
+    if (env.get("currentCoinbase")) |v| {
+        ctx.block_coinbase = try parseAddress(v.string);
+    }
+    if (env.get("currentNumber")) |v| {
+        ctx.block_number = try parseU64FromHex(v.string);
+    }
+    if (env.get("currentTimestamp")) |v| {
+        ctx.block_timestamp = try parseU64FromHex(v.string);
+    }
+    if (env.get("currentGasLimit")) |v| {
+        ctx.block_gaslimit = try parseU64FromHex(v.string);
+    }
+    if (env.get("currentDifficulty")) |v| {
+        ctx.block_difficulty = try parseU256FromHex(v.string);
+    }
+    if (env.get("currentBaseFee")) |v| {
+        ctx.block_base_fee = try parseU64FromHex(v.string);
+    }
+    if (env.get("currentRandom")) |v| {
+        ctx.block_prev_randao = try parseU256FromHex(v.string);
+    } else if (env.get("currentPrevRandao")) |v| {
+        ctx.block_prev_randao = try parseU256FromHex(v.string);
+    }
+}
+
 fn loadStateFromPre(allocator: std.mem.Allocator, db: *state.StateDB, pre: std.json.Value) !void {
     const obj = pre.object;
     var it = obj.iterator();
@@ -95,17 +122,42 @@ fn parseU64FromHex(hex: []const u8) !u64 {
     return u.limbs[0];
 }
 
-fn postStateMatches(db: *state.StateDB, post: std.json.Value) !bool {
+fn postStateMismatch(allocator: std.mem.Allocator, db: *state.StateDB, post: std.json.Value) !?[]u8 {
     const obj = post.object;
     var it = obj.iterator();
     while (it.next()) |entry| {
         const addr = try parseAddress(entry.key_ptr.*);
         const acc = entry.value_ptr.*.object;
 
+        if (!db.exists(addr)) {
+            return try std.fmt.allocPrint(allocator, "missing account {s}", .{entry.key_ptr.*});
+        }
+
         if (acc.get("balance")) |v| {
             const expected = try parseU256FromHex(v.string);
             const got = try db.getBalance(addr);
-            if (!got.eq(expected)) return false;
+            if (!got.eq(expected)) {
+                return try std.fmt.allocPrint(allocator, "balance mismatch for {s}", .{entry.key_ptr.*});
+            }
+        }
+        if (acc.get("nonce")) |v| {
+            const expected = try parseU64FromHex(v.string);
+            const got = try db.getNonce(addr);
+            if (got != expected) {
+                return try std.fmt.allocPrint(allocator, "nonce mismatch for {s}", .{entry.key_ptr.*});
+            }
+        }
+        if (acc.get("code")) |v| {
+            var expected_owned: ?[]u8 = null;
+            const expected = if (v.string.len > 2) blk: {
+                expected_owned = try parseHexBytes(allocator, v.string);
+                break :blk expected_owned.?;
+            } else &[_]u8{};
+            defer if (expected_owned) |bytes| allocator.free(bytes);
+
+            if (!std.mem.eql(u8, db.getCode(addr), expected)) {
+                return try std.fmt.allocPrint(allocator, "code mismatch for {s}", .{entry.key_ptr.*});
+            }
         }
         if (acc.get("storage")) |st| {
             const storage_obj = st.object;
@@ -114,11 +166,13 @@ fn postStateMatches(db: *state.StateDB, post: std.json.Value) !bool {
                 const key = try parseU256FromHex(se.key_ptr.*);
                 const expected = try parseU256FromHex(se.value_ptr.*.string);
                 const got = try db.getStorage(addr, key);
-                if (!got.eq(expected)) return false;
+                if (!got.eq(expected)) {
+                    return try std.fmt.allocPrint(allocator, "storage mismatch for {s}[{s}]", .{ entry.key_ptr.*, se.key_ptr.* });
+                }
             }
         }
     }
-    return true;
+    return null;
 }
 
 const VectorOutput = struct {
@@ -129,6 +183,11 @@ const VectorOutput = struct {
     gas_used: u64,
     success: bool,
     return_data_hex: []const u8,
+};
+
+const VmTestRunResult = struct {
+    ok: bool,
+    reason: ?[]u8 = null,
 };
 
 fn runSingleVmTestForVector(
@@ -167,6 +226,9 @@ fn runSingleVmTestForVector(
     ctx.caller = caller;
     ctx.origin = origin;
     ctx.value = value;
+    if (test_obj.get("env")) |env_val| {
+        try applyEnvToContext(&ctx, env_val);
+    }
 
     var vm = try evm.EVM.initWithState(allocator, gas_limit, ctx, &db);
     defer vm.deinit();
@@ -214,12 +276,11 @@ fn runSingleVmTest(
     allocator: std.mem.Allocator,
     _: []const u8,
     test_obj: std.json.ObjectMap,
-) !bool {
-    const exec_val = test_obj.get("exec") orelse return false;
+) !VmTestRunResult {
+    const exec_val = test_obj.get("exec") orelse return .{ .ok = false, .reason = try allocator.dupe(u8, "missing exec") };
     const exec = exec_val.object;
-    const env_val = test_obj.get("env") orelse return false;
-    _ = env_val;
-    const pre_val = test_obj.get("pre") orelse return false;
+    const env_val = test_obj.get("env") orelse return .{ .ok = false, .reason = try allocator.dupe(u8, "missing env") };
+    const pre_val = test_obj.get("pre") orelse return .{ .ok = false, .reason = try allocator.dupe(u8, "missing pre") };
 
     const code_hex = exec.get("code").?.string;
     const code = try parseHexBytes(allocator, code_hex);
@@ -248,28 +309,39 @@ fn runSingleVmTest(
     ctx.caller = caller;
     ctx.origin = origin;
     ctx.value = value;
+    try applyEnvToContext(&ctx, env_val);
 
     var vm = try evm.EVM.initWithState(allocator, gas_limit, ctx, &db);
     defer vm.deinit();
 
     const result = vm.execute(code, data) catch {
         if (test_obj.get("post") == null) {
-            return true;
+            return .{ .ok = true };
         }
-        return false;
+        return .{ .ok = false, .reason = try allocator.dupe(u8, "execution failed before post-state validation") };
     };
     defer if (result.return_data.len > 0) allocator.free(result.return_data);
     defer allocator.free(result.logs);
 
     if (test_obj.get("post")) |post_val| {
-        const match = try postStateMatches(&db, post_val);
-        if (!match) return false;
+        if (try postStateMismatch(allocator, &db, post_val)) |reason| {
+            return .{ .ok = false, .reason = reason };
+        }
     }
     if (test_obj.get("gas")) |gas_val| {
         const expected_remaining = try parseU64FromHex(gas_val.string);
         const gas_used = vm.gas_used;
         const actual_remaining = gas_limit -| gas_used;
-        if (actual_remaining != expected_remaining) return false;
+        if (actual_remaining != expected_remaining) {
+            return .{
+                .ok = false,
+                .reason = try std.fmt.allocPrint(
+                    allocator,
+                    "gas mismatch: expected remaining {}, got {}",
+                    .{ expected_remaining, actual_remaining },
+                ),
+            };
+        }
     }
     if (test_obj.get("out")) |out_val| {
         var expected_owned: ?[]const u8 = null;
@@ -278,9 +350,11 @@ fn runSingleVmTest(
             break :blk expected_owned.?;
         } else &[_]u8{};
         defer if (expected_owned) |o| allocator.free(o);
-        if (!std.mem.eql(u8, result.return_data, expected_out)) return false;
+        if (!std.mem.eql(u8, result.return_data, expected_out)) {
+            return .{ .ok = false, .reason = try allocator.dupe(u8, "return data mismatch") };
+        }
     }
-    return true;
+    return .{ .ok = true };
 }
 
 pub fn main() !void {
@@ -293,6 +367,7 @@ pub fn main() !void {
     var tests_dir: []const u8 = TestDir;
     var convert_mode = false;
     var out_path: ?[]const u8 = null;
+    var summary_json_path: ?[]const u8 = null;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--tests-dir")) {
             if (args.next()) |p| tests_dir = p;
@@ -300,6 +375,8 @@ pub fn main() !void {
             convert_mode = true;
         } else if (std.mem.eql(u8, arg, "--out")) {
             if (args.next()) |p| out_path = p;
+        } else if (std.mem.eql(u8, arg, "--summary-json")) {
+            if (args.next()) |p| summary_json_path = p;
         }
     }
 
@@ -355,6 +432,7 @@ pub fn main() !void {
 
     var total: usize = 0;
     var passed: usize = 0;
+    var failed: usize = 0;
     var walker = try dir.walk(allocator);
     defer walker.deinit();
 
@@ -377,16 +455,41 @@ pub fn main() !void {
         var it = root.iterator();
         while (it.next()) |test_entry| {
             total += 1;
-            const ok = runSingleVmTest(allocator, test_entry.key_ptr.*, test_entry.value_ptr.*.object) catch false;
-            if (ok) passed += 1 else {
+            const run_result = runSingleVmTest(allocator, test_entry.key_ptr.*, test_entry.value_ptr.*.object) catch blk: {
+                break :blk VmTestRunResult{
+                    .ok = false,
+                    .reason = try allocator.dupe(u8, "runner error"),
+                };
+            };
+            defer if (run_result.reason) |reason| allocator.free(reason);
+            if (run_result.ok) {
+                passed += 1;
+            } else {
+                failed += 1;
                 if (passed + (total - passed) <= 20) {
-                    std.debug.print("FAIL: {s}/{s}\n", .{ entry.path, test_entry.key_ptr.* });
+                    std.debug.print("FAIL: {s}/{s}", .{ entry.path, test_entry.key_ptr.* });
+                    if (run_result.reason) |reason| {
+                        std.debug.print(" ({s})", .{reason});
+                    }
+                    std.debug.print("\n", .{});
                 }
             }
         }
     }
 
     std.debug.print("VMTests: {}/{} passed\n", .{ passed, total });
+    if (summary_json_path) |path| {
+        const summary = .{
+            .total = total,
+            .passed = passed,
+            .failed = failed,
+            .tests_dir = tests_dir,
+            .generated_at = std.time.timestamp(),
+        };
+        const file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+        defer file.close();
+        try std.json.stringify(summary, .{ .whitespace = .indent_2 }, file.writer());
+    }
     if (total > 0 and passed < total) {
         std.process.exit(1);
     }

@@ -2,6 +2,7 @@ const std = @import("std");
 const evm = @import("evm");
 const types = @import("types");
 const crypto = @import("crypto");
+const state = @import("state");
 
 // Performance Benchmarks
 // Quantify everything. No guessing.
@@ -111,6 +112,42 @@ pub fn main() !void {
         std.debug.print("  {} ns/execution\n", .{ns_per_exec});
         std.debug.print("  {} executions/sec\n", .{execs_per_sec});
         std.debug.print("  ~{} opcodes/sec\n\n", .{execs_per_sec * 3});
+    }
+
+    // Benchmark 5: State journal checkpoint churn
+    {
+        var db = state.StateDB.init(allocator);
+        defer db.deinit();
+
+        var addr = types.Address.zero;
+        addr.bytes[19] = 0x77;
+        const key = types.U256.fromU64(1);
+        try db.createAccount(addr);
+        try db.setBalance(addr, types.U256.fromU64(1));
+        try db.setStorage(addr, key, types.U256.fromU64(1));
+        try db.setCode(addr, &[_]u8{ 0x60, 0x00, 0x00 });
+
+        const start = std.time.nanoTimestamp();
+
+        for (0..iterations) |i| {
+            const sid = try db.snapshot();
+            try db.setBalance(addr, types.U256.fromU64(@intCast(i + 2)));
+            try db.setStorage(addr, key, types.U256.fromU64(@intCast(i + 3)));
+            if ((i & 1) == 0) {
+                try db.revertToSnapshot(sid);
+            } else {
+                try db.commitSnapshot(sid);
+            }
+        }
+
+        const end = std.time.nanoTimestamp();
+        const elapsed_ns = end - start;
+        const ns_per_iter = @divFloor(elapsed_ns, iterations);
+        const ops_per_sec = @divFloor(1_000_000_000, ns_per_iter);
+
+        std.debug.print("State Journal Checkpoints:\n", .{});
+        std.debug.print("  {} ns/iteration\n", .{ns_per_iter});
+        std.debug.print("  {} checkpoint ops/sec\n\n", .{ops_per_sec});
     }
 
     std.debug.print("=== Benchmarks Complete ===\n", .{});

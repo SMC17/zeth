@@ -81,17 +81,21 @@ pub const U256 = struct {
     }
 
     pub fn fromBytes(bytes: [32]u8) U256 {
+        // Big-endian bytes: bytes[0] is MSB, bytes[31] is LSB.
+        // Limb layout: limbs[0] is LSB, limbs[3] is MSB.
         var result = U256.zero();
         for (0..4) |i| {
-            result.limbs[i] = std.mem.readInt(u64, bytes[i * 8 ..][0..8], .big);
+            // limbs[0] ← bytes[24..32], limbs[3] ← bytes[0..8]
+            result.limbs[i] = std.mem.readInt(u64, bytes[(3 - i) * 8 ..][0..8], .big);
         }
         return result;
     }
 
     pub fn toBytes(self: U256) [32]u8 {
+        // Inverse of fromBytes: limbs[3] (MSB) → bytes[0..8], limbs[0] (LSB) → bytes[24..32]
         var bytes: [32]u8 = undefined;
         for (0..4) |i| {
-            std.mem.writeInt(u64, bytes[i * 8 ..][0..8], self.limbs[i], .big);
+            std.mem.writeInt(u64, bytes[(3 - i) * 8 ..][0..8], self.limbs[i], .big);
         }
         return bytes;
     }

@@ -30,6 +30,7 @@ pub fn build(b: *std.Build) void {
     });
     state_mod.addImport("types", types_mod);
     state_mod.addImport("crypto", crypto_mod);
+    state_mod.addImport("rlp", rlp_mod);
 
     const evm_mod = b.addModule("evm", .{
         .root_source_file = b.path("src/evm/evm.zig"),
@@ -168,6 +169,7 @@ pub fn build(b: *std.Build) void {
     bench_mod.addImport("types", types_mod);
     bench_mod.addImport("crypto", crypto_mod);
     bench_mod.addImport("evm", evm_mod);
+    bench_mod.addImport("state", state_mod);
 
     const bench_exe = b.addExecutable(.{
         .name = "benchmarks",
@@ -275,6 +277,21 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| vector_runner_run.addArgs(args);
     const vector_run_step = b.step("vector-run", "Run test vector regression (usage: zig build vector-run -- path/to/vectors.json)");
     vector_run_step.dependOn(&vector_runner_run.step);
+
+    const regression_gate_mod = b.createModule(.{
+        .root_source_file = b.path("validation/regression_gate.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const regression_gate_exe = b.addExecutable(.{
+        .name = "regression_gate",
+        .root_module = regression_gate_mod,
+    });
+    b.installArtifact(regression_gate_exe);
+    const regression_gate_run = b.addRunArtifact(regression_gate_exe);
+    if (b.args) |args| regression_gate_run.addArgs(args);
+    const regression_gate_step = b.step("regression-gate", "Check discrepancy JSON against a baseline");
+    regression_gate_step.dependOn(&regression_gate_run.step);
 
     // Opcode docs generator
     const opcode_docs_mod = b.createModule(.{
@@ -388,6 +405,23 @@ pub fn build(b: *std.Build) void {
     const run_comprehensive_tests = b.addRunArtifact(comprehensive_tests);
     test_step.dependOn(&run_comprehensive_tests.step);
 
+    // Journal integration tests (nested CALL/CREATE/SELFDESTRUCT state journaling)
+    const journal_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/evm/journal_integration_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    journal_test_mod.addImport("evm", evm_mod);
+    journal_test_mod.addImport("types", types_mod);
+    journal_test_mod.addImport("crypto", crypto_mod);
+    journal_test_mod.addImport("state", state_mod);
+
+    const journal_tests = b.addTest(.{
+        .root_module = journal_test_mod,
+    });
+    const run_journal_tests = b.addRunArtifact(journal_tests);
+    test_step.dependOn(&run_journal_tests.step);
+
     // Edge case tests for U256
     const types_edge_test_mod = b.createModule(.{
         .root_source_file = b.path("src/types/edge_case_tests.zig"),
@@ -411,12 +445,29 @@ pub fn build(b: *std.Build) void {
     evm_edge_test_mod.addImport("evm", evm_mod);
     evm_edge_test_mod.addImport("types", types_mod);
     evm_edge_test_mod.addImport("crypto", crypto_mod);
+    evm_edge_test_mod.addImport("state", state_mod);
 
     const evm_edge_tests = b.addTest(.{
         .root_module = evm_edge_test_mod,
     });
     const run_evm_edge_tests = b.addRunArtifact(evm_edge_tests);
     test_step.dependOn(&run_evm_edge_tests.step);
+
+    // Parity edge tests (signed arithmetic, bitwise shifts, env opcodes)
+    const parity_edge_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/evm/parity_edge_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    parity_edge_test_mod.addImport("evm", evm_mod);
+    parity_edge_test_mod.addImport("types", types_mod);
+    parity_edge_test_mod.addImport("state", state_mod);
+
+    const parity_edge_tests = b.addTest(.{
+        .root_module = parity_edge_test_mod,
+    });
+    const run_parity_edge_tests = b.addRunArtifact(parity_edge_tests);
+    test_step.dependOn(&run_parity_edge_tests.step);
 
     // Manual opcode verification tests
     const manual_opcode_test_mod = b.createModule(.{
@@ -441,6 +492,7 @@ pub fn build(b: *std.Build) void {
     });
     comparison_test_mod.addImport("evm", evm_mod);
     comparison_test_mod.addImport("types", types_mod);
+    comparison_test_mod.addImport("state", state_mod);
 
     const comparison_tests = b.addTest(.{
         .root_module = comparison_test_mod,
@@ -471,6 +523,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     reference_interfaces_mod.addImport("types", types_mod);
+    reference_interfaces_mod.addImport("comparison_tool", comparison_test_mod);
 
     const reference_interfaces_tests = b.addTest(.{
         .root_module = reference_interfaces_mod,

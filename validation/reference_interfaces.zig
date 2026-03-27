@@ -1,5 +1,6 @@
 const std = @import("std");
 const types = @import("types");
+const comparison = @import("comparison_tool");
 
 /// Interface to reference Ethereum implementations (Geth, PyEVM)
 /// Uses subprocess execution to run bytecode and compare results
@@ -8,6 +9,7 @@ pub const ReferenceResult = struct {
     gas_used: u64,
     return_data: []const u8,
     stack: []types.U256,
+    storage: []comparison.ExecutionComparison.StorageEntry,
     error_message: ?[]const u8,
     allocator: std.mem.Allocator,
 
@@ -17,6 +19,7 @@ pub const ReferenceResult = struct {
             _ = item; // U256 doesn't need deinit
         }
         self.allocator.free(self.stack);
+        self.allocator.free(self.storage);
         if (self.error_message) |err| {
             self.allocator.free(err);
         }
@@ -25,18 +28,27 @@ pub const ReferenceResult = struct {
 
 /// Execute bytecode using Geth via subprocess
 /// Geth can execute bytecode via eth_call JSON-RPC or direct execution
-pub fn executeWithGeth(allocator: std.mem.Allocator, bytecode: []const u8, calldata: []const u8) !ReferenceResult {
+pub fn executeWithGeth(
+    allocator: std.mem.Allocator,
+    bytecode: []const u8,
+    calldata: []const u8,
+    pre_storage: []const comparison.ExecutionComparison.StorageEntry,
+    tracked_storage: []const types.U256,
+) !ReferenceResult {
     // For now, return a placeholder that indicates Geth is not yet integrated
     // TODO: Implement actual Geth subprocess execution
 
     _ = bytecode;
     _ = calldata;
+    _ = pre_storage;
+    _ = tracked_storage;
 
     return ReferenceResult{
         .success = false,
         .gas_used = 0,
         .return_data = try allocator.dupe(u8, &[_]u8{}),
         .stack = try allocator.alloc(types.U256, 0),
+        .storage = try allocator.alloc(comparison.ExecutionComparison.StorageEntry, 0),
         .error_message = try allocator.dupe(u8, "Geth interface not yet implemented"),
         .allocator = allocator,
     };
@@ -44,7 +56,13 @@ pub fn executeWithGeth(allocator: std.mem.Allocator, bytecode: []const u8, calld
 
 /// Execute bytecode using PyEVM via Python subprocess
 /// PyEVM can execute bytecode directly via Python script
-pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, calldata: []const u8) !ReferenceResult {
+pub fn executeWithPyEVM(
+    allocator: std.mem.Allocator,
+    bytecode: []const u8,
+    calldata: []const u8,
+    pre_storage: []const comparison.ExecutionComparison.StorageEntry,
+    tracked_storage: []const types.U256,
+) !ReferenceResult {
     // Use the pyevm_executor.py script (the working implementation)
     const script_path = "validation/pyevm_executor.py";
 
@@ -68,6 +86,25 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
     const calldata_hex_str = try calldata_hex.toOwnedSlice();
     defer allocator.free(calldata_hex_str);
 
+    var payload_buf = std.ArrayList(u8).init(allocator);
+    defer payload_buf.deinit();
+    try payload_buf.writer().writeAll("{\"pre_storage\":[");
+    for (pre_storage, 0..) |entry, idx| {
+        if (idx != 0) try payload_buf.writer().writeByte(',');
+        try payload_buf.writer().print(
+            "{{\"key\":\"0x{x}\",\"value\":\"0x{x}\"}}",
+            .{ entry.key.limbs[0], entry.value.limbs[0] },
+        );
+    }
+    try payload_buf.writer().writeAll("],\"tracked_storage_keys\":[");
+    for (tracked_storage, 0..) |key, idx| {
+        if (idx != 0) try payload_buf.writer().writeByte(',');
+        try payload_buf.writer().print("\"0x{x}\"", .{key.limbs[0]});
+    }
+    try payload_buf.writer().writeAll("]}");
+    const payload_json = try payload_buf.toOwnedSlice();
+    defer allocator.free(payload_json);
+
     // Execute Python script using temp file for output (workaround for Zig 0.15.1 pipe reading issues)
     const script_full_path = try std.fs.path.resolve(allocator, &.{script_path});
     defer allocator.free(script_full_path);
@@ -77,7 +114,7 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
     defer allocator.free(tmp_path);
 
     // Use shell to redirect output to temp file
-    const cmd = try std.fmt.allocPrint(allocator, "python3 {s} {s} {s} > {s} 2>&1", .{ script_full_path, bytecode_hex_str, calldata_hex_str, tmp_path });
+    const cmd = try std.fmt.allocPrint(allocator, "python3 {s} {s} {s} '{s}' > {s} 2>&1", .{ script_full_path, bytecode_hex_str, calldata_hex_str, payload_json, tmp_path });
     defer allocator.free(cmd);
 
     var child = std.process.Child.init(&.{ "sh", "-c", cmd }, allocator);
@@ -91,6 +128,7 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
             .gas_used = 0,
             .return_data = try allocator.dupe(u8, &[_]u8{}),
             .stack = try allocator.alloc(types.U256, 0),
+            .storage = try allocator.alloc(comparison.ExecutionComparison.StorageEntry, 0),
             .error_message = try std.fmt.allocPrint(allocator, "PyEVM execution failed: {}", .{err}),
             .allocator = allocator,
         };
@@ -103,6 +141,7 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
             .gas_used = 0,
             .return_data = try allocator.dupe(u8, &[_]u8{}),
             .stack = try allocator.alloc(types.U256, 0),
+            .storage = try allocator.alloc(comparison.ExecutionComparison.StorageEntry, 0),
             .error_message = try std.fmt.allocPrint(allocator, "Failed to wait for process: {}", .{err}),
             .allocator = allocator,
         };
@@ -116,6 +155,7 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
             .gas_used = 0,
             .return_data = try allocator.dupe(u8, &[_]u8{}),
             .stack = try allocator.alloc(types.U256, 0),
+            .storage = try allocator.alloc(comparison.ExecutionComparison.StorageEntry, 0),
             .error_message = try std.fmt.allocPrint(allocator, "Failed to open output file: {}", .{err}),
             .allocator = allocator,
         };
@@ -133,6 +173,7 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
             .gas_used = 0,
             .return_data = try allocator.dupe(u8, &[_]u8{}),
             .stack = try allocator.alloc(types.U256, 0),
+            .storage = try allocator.alloc(comparison.ExecutionComparison.StorageEntry, 0),
             .error_message = try std.fmt.allocPrint(allocator, "Process exited with code {}", .{if (term == .Exited) term.Exited else 1}),
             .allocator = allocator,
         };
@@ -144,7 +185,11 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
             success: bool,
             gas_used: ?u64,
             return_data: ?[]const u8,
-            stack: []const u64,
+            stack: []const []const u8,
+            storage: []const struct {
+                key: []const u8,
+                value: []const u8,
+            },
             @"error": ?[]const u8,
         },
         allocator,
@@ -156,6 +201,7 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
             .gas_used = 0,
             .return_data = try allocator.dupe(u8, &[_]u8{}),
             .stack = try allocator.alloc(types.U256, 0),
+            .storage = try allocator.alloc(comparison.ExecutionComparison.StorageEntry, 0),
             .error_message = try std.fmt.allocPrint(allocator, "JSON parse error: {}", .{err}),
             .allocator = allocator,
         };
@@ -182,7 +228,14 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
 
     var stack_values = try allocator.alloc(types.U256, parsed.stack.len);
     for (parsed.stack, 0..) |v, i| {
-        stack_values[i] = types.U256.fromU64(v);
+        stack_values[i] = try parseU256Hex(v);
+    }
+    var storage_values = try allocator.alloc(comparison.ExecutionComparison.StorageEntry, parsed.storage.len);
+    for (parsed.storage, 0..) |entry, i| {
+        storage_values[i] = .{
+            .key = try parseU256Hex(entry.key),
+            .value = try parseU256Hex(entry.value),
+        };
     }
 
     // Success is determined by parsed.success boolean, not by absence of error
@@ -191,9 +244,22 @@ pub fn executeWithPyEVM(allocator: std.mem.Allocator, bytecode: []const u8, call
         .gas_used = parsed.gas_used orelse 0,
         .return_data = return_data,
         .stack = stack_values,
+        .storage = storage_values,
         .error_message = error_msg,
         .allocator = allocator,
     };
+}
+
+fn parseU256Hex(hex: []const u8) !types.U256 {
+    var s = hex;
+    if (std.mem.startsWith(u8, s, "0x")) s = s[2..];
+    if (s.len == 0) return types.U256.zero();
+    const bytes = try parseHex(std.heap.page_allocator, s);
+    defer std.heap.page_allocator.free(bytes);
+    if (bytes.len > 32) return error.U256Overflow;
+    var buf: [32]u8 = [_]u8{0} ** 32;
+    @memcpy(buf[32 - bytes.len ..], bytes);
+    return types.U256.fromBytes(buf);
 }
 
 /// Parse hex string to bytes

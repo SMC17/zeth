@@ -251,6 +251,7 @@ test "EVM: CALLCODE executes target code in caller storage context" {
     var caller = types.Address.zero;
     caller.bytes[19] = 0xbb;
     try db.createAccount(caller);
+    try db.setBalance(caller, types.U256.fromU64(100));
 
     var context = evm.ExecutionContext.default();
     context.address = caller;
@@ -265,7 +266,7 @@ test "EVM: CALLCODE executes target code in caller storage context" {
         0x60, 0x00, // retOff
         0x60, 0x00, // argsLen
         0x60, 0x00, // argsOff
-        0x60, 0x00, // value
+        0x60, 0x05, // value
         0x60, 0x0a, // code address
         0x61, 0xff, 0xff, // gas
         0xf2, // CALLCODE
@@ -280,6 +281,8 @@ test "EVM: CALLCODE executes target code in caller storage context" {
 
     const target_stored = try db.getStorage(code_addr, types.U256.fromU64(1));
     try testing.expect(target_stored.isZero());
+    try testing.expectEqual(@as(u64, 100), (try db.getBalance(caller)).limbs[0]);
+    try testing.expect((try db.getBalance(code_addr)).isZero());
 }
 
 test "EVM: BLOCKHASH does not underflow for low block numbers" {
@@ -1002,10 +1005,13 @@ test "EVM: CALL dispatches IDENTITY precompile (0x04) with exact gas" {
 
     const success = try vm.stack.pop();
     try testing.expectEqual(@as(u64, 1), success.limbs[0]);
-    try testing.expectEqual(@as(u8, 0x01), vm.memory.data.items[68]);
-    try testing.expectEqual(@as(u8, 0x02), vm.memory.data.items[69]);
-    try testing.expectEqual(@as(u8, 0x03), vm.memory.data.items[70]);
-    try testing.expectEqual(@as(u8, 0x04), vm.memory.data.items[71]);
+    // PUSH4 0x01020304 produces U256 with value 0x01020304.
+    // toBytes() stores as big-endian: the 4 bytes land at positions [28..32] within the 32-byte word.
+    // After IDENTITY precompile + CALL return to outOffset=64, they're at memory[64+28..64+32] = [92..96].
+    try testing.expectEqual(@as(u8, 0x01), vm.memory.data.items[92]);
+    try testing.expectEqual(@as(u8, 0x02), vm.memory.data.items[93]);
+    try testing.expectEqual(@as(u8, 0x03), vm.memory.data.items[94]);
+    try testing.expectEqual(@as(u8, 0x04), vm.memory.data.items[95]);
 
     // Total gas under current memory accounting model:
     // PUSH4+PUSH1+MSTORE = 12 (includes 0->32 memory expansion)
@@ -1965,21 +1971,26 @@ test "EVM: CREATE2 is deterministic for same salt and init code" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var db = state.StateDB.init(allocator);
-    defer db.deinit();
-
     var creator = types.Address.zero;
     creator.bytes[19] = 0xcc;
-    try db.createAccount(creator);
-    try db.setBalance(creator, types.U256.fromU64(1_000_000));
+
+    var db1 = state.StateDB.init(allocator);
+    defer db1.deinit();
+    try db1.createAccount(creator);
+    try db1.setBalance(creator, types.U256.fromU64(1_000_000));
+
+    var db2 = state.StateDB.init(allocator);
+    defer db2.deinit();
+    try db2.createAccount(creator);
+    try db2.setBalance(creator, types.U256.fromU64(1_000_000));
 
     var context = evm.ExecutionContext.default();
     context.address = creator;
     context.caller = creator;
 
-    var vm1 = try evm.EVM.initWithState(allocator, 2_000_000, context, &db);
+    var vm1 = try evm.EVM.initWithState(allocator, 2_000_000, context, &db1);
     defer vm1.deinit();
-    var vm2 = try evm.EVM.initWithState(allocator, 2_000_000, context, &db);
+    var vm2 = try evm.EVM.initWithState(allocator, 2_000_000, context, &db2);
     defer vm2.deinit();
 
     const code = [_]u8{
@@ -2009,6 +2020,58 @@ test "EVM: CREATE2 is deterministic for same salt and init code" {
     const a1 = try vm1.stack.pop();
     const a2 = try vm2.stack.pop();
     try testing.expect(a1.eq(a2));
+}
+
+test "EVM: CREATE2 fails when target address already has code" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var creator = types.Address.zero;
+    creator.bytes[19] = 0xcd;
+    try db.createAccount(creator);
+    try db.setBalance(creator, types.U256.fromU64(1_000_000));
+
+    var context = evm.ExecutionContext.default();
+    context.address = creator;
+    context.caller = creator;
+
+    var vm1 = try evm.EVM.initWithState(allocator, 2_000_000, context, &db);
+    defer vm1.deinit();
+    var vm2 = try evm.EVM.initWithState(allocator, 2_000_000, context, &db);
+    defer vm2.deinit();
+
+    const code = [_]u8{
+        0x60, 0x60, 0x60, 0x00, 0x53,
+        0x60, 0x2a, 0x60, 0x01, 0x53,
+        0x60, 0x60, 0x60, 0x02, 0x53,
+        0x60, 0x00, 0x60, 0x03, 0x53,
+        0x60, 0x53, 0x60, 0x04, 0x53,
+        0x60, 0x60, 0x60, 0x05, 0x53,
+        0x60, 0x01, 0x60, 0x06, 0x53,
+        0x60, 0x60, 0x60, 0x07, 0x53,
+        0x60, 0x00, 0x60, 0x08, 0x53,
+        0x60, 0xf3, 0x60, 0x09, 0x53,
+        0x60, 0x01, 0x60, 0x0a, 0x60,
+        0x00, 0x60, 0x00, 0xf5,
+    };
+
+    const first = try vm1.execute(&code, &[_]u8{});
+    defer if (first.return_data.len > 0) allocator.free(first.return_data);
+    defer allocator.free(first.logs);
+    const first_addr_u256 = try vm1.stack.pop();
+    try testing.expect(!first_addr_u256.isZero());
+    const first_addr = addressFromU256(first_addr_u256);
+    try testing.expect(db.getCode(first_addr).len > 0);
+
+    const second = try vm2.execute(&code, &[_]u8{});
+    defer if (second.return_data.len > 0) allocator.free(second.return_data);
+    defer allocator.free(second.logs);
+    const second_addr_u256 = try vm2.stack.pop();
+    try testing.expect(second_addr_u256.isZero());
+    try testing.expect(db.getCode(first_addr).len > 0);
 }
 
 test "EVM: top-level REVERT rolls back CREATE2 deployed code" {
@@ -2536,6 +2599,10 @@ test "EVM: CALL gas includes value transfer and new-account cost" {
     try testing.expectEqual(@as(u64, 1), success.limbs[0]);
     // PUSHes (7 * 3) + CALL base (700 + 2600 cold + 9000 value + 25000 new account).
     try testing.expectEqual(@as(u64, 37_321), vm.gas_used);
+    try testing.expectEqual(@as(u64, 999_999), (try db.getBalance(sender)).limbs[0]);
+    var recipient = types.Address.zero;
+    recipient.bytes[19] = 0x0a;
+    try testing.expectEqual(@as(u64, 1), (try db.getBalance(recipient)).limbs[0]);
 }
 
 test "EVM: CREATE2 charges additional hashcost over CREATE for same init code length" {
@@ -2677,6 +2744,57 @@ test "EVM: CALL with value forwards 2300 stipend even when requested gas is zero
     // CALL base (existing account): 700 + 2600 cold + 9000 value = 12300
     // Child execution uses stipend gas: PUSH1(3) + STOP(0) = 3
     try testing.expectEqual(@as(u64, 12_324), vm.gas_used);
+    try testing.expectEqual(@as(u64, 999_999), (try db.getBalance(sender)).limbs[0]);
+    try testing.expectEqual(@as(u64, 1), (try db.getBalance(target)).limbs[0]);
+}
+
+test "EVM: CALL revert restores transferred value" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var sender = types.Address.zero;
+    sender.bytes[19] = 0xaa;
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.fromU64(50));
+
+    var target = types.Address.zero;
+    target.bytes[19] = 0x0b;
+    try db.createAccount(target);
+    try db.setCode(target, &[_]u8{
+        0x60, 0x00, // revert offset
+        0x60, 0x00, // revert length
+        0xfd, // REVERT
+    });
+
+    var ctx = evm.ExecutionContext.default();
+    ctx.address = sender;
+    ctx.caller = sender;
+
+    var vm = try evm.EVM.initWithState(allocator, 100_000, ctx, &db);
+    defer vm.deinit();
+
+    const caller = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x05, // value
+        0x60, 0x0b, // address
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+    };
+
+    const result = try vm.execute(&caller, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const call_success = try vm.stack.pop();
+    try testing.expect(call_success.isZero());
+    try testing.expectEqual(@as(u64, 50), (try db.getBalance(sender)).limbs[0]);
+    try testing.expect((try db.getBalance(target)).isZero());
 }
 
 test "EVM: value CALL OOG consumes forwarded gas plus stipend" {
@@ -2821,7 +2939,201 @@ test "EVM: SSTORE clear tracks refund and exact gas" {
     defer allocator.free(result.logs);
 
     try testing.expectEqual(@as(u64, 22_212), vm.gas_used);
-    try testing.expectEqual(@as(u64, 4_800), vm.gas_refund);
+    try testing.expectEqual(@as(u64, 19_900), vm.gas_refund);
+}
+
+test "EVM: SSTORE reset to original value earns exact refund" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 200_000);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x07, // value
+        0x60, 0x01, // key
+        0x55, // SSTORE 0 -> 7
+        0x60, 0x00, // value
+        0x60, 0x01, // key
+        0x55, // SSTORE 7 -> 0 (reset to original)
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    try testing.expectEqual(@as(u64, 22_212), vm.gas_used);
+    try testing.expectEqual(@as(u64, 19_900), vm.gas_refund);
+}
+
+test "EVM: SSTORE dirty clear then restore removes intermediate refund" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    try db.setStorage(types.Address.zero, types.U256.fromU64(1), types.U256.fromU64(5));
+
+    var vm = try evm.EVM.initWithState(allocator, 200_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x00, // value
+        0x60, 0x01, // key
+        0x55, // SSTORE 5 -> 0
+        0x60, 0x05, // value
+        0x60, 0x01, // key
+        0x55, // SSTORE 0 -> 5 (restore original)
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    try testing.expectEqual(@as(u64, 5_112), vm.gas_used);
+    try testing.expectEqual(@as(u64, 2_800), vm.gas_refund);
+    try testing.expectEqual(@as(u64, 5), (try db.getStorage(types.Address.zero, types.U256.fromU64(1))).limbs[0]);
+}
+
+test "EVM: CALLCODE shares original storage state across nested frames" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var caller = types.Address.zero;
+    caller.bytes[19] = 0xaa;
+    try db.createAccount(caller);
+    try db.setStorage(caller, types.U256.fromU64(1), types.U256.fromU64(5));
+
+    var clear_code_addr = types.Address.zero;
+    clear_code_addr.bytes[19] = 0x0a;
+    try db.setCode(clear_code_addr, &[_]u8{
+        0x60, 0x00, // value
+        0x60, 0x01, // key
+        0x55, // SSTORE
+        0x00, // STOP
+    });
+
+    var restore_code_addr = types.Address.zero;
+    restore_code_addr.bytes[19] = 0x0b;
+    try db.setCode(restore_code_addr, &[_]u8{
+        0x60, 0x05, // value
+        0x60, 0x01, // key
+        0x55, // SSTORE
+        0x00, // STOP
+    });
+
+    var ctx = evm.ExecutionContext.default();
+    ctx.address = caller;
+    ctx.caller = caller;
+
+    var vm = try evm.EVM.initWithState(allocator, 200_000, ctx, &db);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x0a, 0x61, 0xff, 0xff, 0xf2, // CALLCODE clear
+        0x50, // POP
+        0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x0b, 0x61, 0xff, 0xff, 0xf2, // CALLCODE restore
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const second_success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), second_success.limbs[0]);
+    try testing.expectEqual(@as(u64, 11_756), vm.gas_used);
+    try testing.expectEqual(@as(u64, 2_800), vm.gas_refund);
+    try testing.expectEqual(@as(u64, 5), (try db.getStorage(caller, types.U256.fromU64(1))).limbs[0]);
+}
+
+test "EVM: reverted CALLCODE still warms caller storage for parent access" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var caller = types.Address.zero;
+    caller.bytes[19] = 0xbb;
+    try db.createAccount(caller);
+    try db.setStorage(caller, types.U256.fromU64(1), types.U256.fromU64(5));
+
+    var code_addr = types.Address.zero;
+    code_addr.bytes[19] = 0x0c;
+    try db.setCode(code_addr, &[_]u8{
+        0x60, 0x01, // key
+        0x54, // SLOAD (warms caller slot via CALLCODE storage context)
+        0x60, 0x00, // revert offset
+        0x60, 0x00, // revert size
+        0xfd, // REVERT
+    });
+
+    var ctx = evm.ExecutionContext.default();
+    ctx.address = caller;
+    ctx.caller = caller;
+
+    var vm = try evm.EVM.initWithState(allocator, 200_000, ctx, &db);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x0c, 0x61, 0xff, 0xff, 0xf2, // CALLCODE revert
+        0x50, // POP
+        0x60, 0x01, // key
+        0x54, // SLOAD should now be warm
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    try testing.expectEqual(@as(u64, 5_535), vm.gas_used);
+    const loaded = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 5), loaded.limbs[0]);
+}
+
+test "EVM: reverted child frame still warms accessed account for parent" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var callee = types.Address.zero;
+    callee.bytes[19] = 0x0a;
+    try db.setCode(callee, &[_]u8{
+        0x60, 0x0b, // address to warm
+        0x31, // BALANCE
+        0x60, 0x00, // revert offset
+        0x60, 0x00, // revert size
+        0xfd, // REVERT
+    });
+
+    var beneficiary = types.Address.zero;
+    beneficiary.bytes[19] = 0x0b;
+    try db.createAccount(beneficiary);
+    try db.setBalance(beneficiary, types.U256.fromU64(7));
+
+    var vm = try evm.EVM.initWithState(allocator, 200_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const code = [_]u8{
+        0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x0a, 0x61, 0xff, 0xff, 0xf1, // CALL revert
+        0x50, // POP
+        0x60, 0x0b, // beneficiary
+        0x31, // BALANCE should now be warm
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    try testing.expectEqual(@as(u64, 6_035), vm.gas_used);
+    const loaded = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 7), loaded.limbs[0]);
 }
 
 test "EVM: CALL to precompile address uses warm access cost" {
@@ -2929,8 +3241,8 @@ test "EVM: CALL propagates child gas refund on successful execution" {
     defer allocator.free(result.logs);
 
     // Parent: 21 push gas + (700 + 2600 cold access)
-    // Child: PUSH1 + PUSH1 + SSTORE(cold clear) + STOP = 3 + 3 + 2100 + 0
-    try testing.expectEqual(@as(u64, 5_427), vm.gas_used);
+    // Child: PUSH1 + PUSH1 + SSTORE(cold clear original nonzero) + STOP = 3 + 3 + 2100 + 2900
+    try testing.expectEqual(@as(u64, 8_327), vm.gas_used);
     try testing.expectEqual(@as(u64, 4_800), vm.gas_refund);
 }
 
@@ -3093,7 +3405,7 @@ test "EVM: nested CALL->CREATE failure rolls back callee nonce and balance" {
     defer allocator.free(result.logs);
 
     const call_success = try vm.stack.pop();
-    try testing.expect(call_success.isZero());
+    try testing.expect(!call_success.isZero());
     try testing.expectEqual(@as(u64, 10), (try db.getBalance(callee)).limbs[0]);
     try testing.expectEqual(@as(u64, 0), try db.getNonce(callee));
 }
@@ -3165,4 +3477,441 @@ test "EVM: top-level REVERT rolls back nested SELFDESTRUCT effects" {
     try testing.expectEqual(@as(u64, 10), callee_balance.limbs[0]);
     const beneficiary_balance = try db.getBalance(beneficiary);
     try testing.expect(beneficiary_balance.isZero());
+}
+
+test "EVM: CALLCODE stipend forwarding with non-zero value" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var sender = types.Address.zero;
+    sender.bytes[19] = 0xaa;
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.fromU64(1_000_000));
+
+    var target = types.Address.zero;
+    target.bytes[19] = 0x0c;
+    try db.createAccount(target);
+    const callee_code = [_]u8{
+        0x60, 0x01, // PUSH1 1
+        0x00, // STOP
+    };
+    try db.setCode(target, &callee_code);
+
+    var ctx = evm.ExecutionContext.default();
+    ctx.address = sender;
+    ctx.caller = sender;
+
+    var vm = try evm.EVM.initWithState(allocator, 100_000, ctx, &db);
+    defer vm.deinit();
+
+    const caller = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x01, // value (non-zero => stipend-eligible)
+        0x60, 0x0c, // address
+        0x60, 0x00, // requested gas = 0
+        0xf2, // CALLCODE
+    };
+
+    const result = try vm.execute(&caller, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const call_success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), call_success.limbs[0]);
+
+    // Parent push gas: 7 * 3 = 21
+    // CALLCODE base: 700 + 2600(cold) + 9000(value) = 12300
+    // Child execution uses stipend gas: PUSH1(3) + STOP(0) = 3
+    try testing.expectEqual(@as(u64, 12_324), vm.gas_used);
+}
+
+test "EVM: DELEGATECALL no stipend even with parent value context" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var target = types.Address.zero;
+    target.bytes[19] = 0x0d;
+    try db.createAccount(target);
+    const callee_code = [_]u8{
+        0x60, 0x01, // PUSH1 1
+        0x00, // STOP
+    };
+    try db.setCode(target, &callee_code);
+
+    var vm = try evm.EVM.initWithState(allocator, 100_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const caller = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x0d, // address
+        0x60, 0x00, // requested gas = 0
+        0xf4, // DELEGATECALL
+    };
+
+    const result = try vm.execute(&caller, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    // DELEGATECALL never adds stipend (no value parameter).
+    // 6 pushes = 18 gas, base = 700 + 2600(cold) = 3300
+    // Child gets 0 gas (no stipend), cannot execute, but no code to run with 0 gas.
+    try testing.expectEqual(@as(u64, 3_318), vm.gas_used);
+}
+
+test "EVM: STATICCALL no stipend" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var target = types.Address.zero;
+    target.bytes[19] = 0x0e;
+    try db.createAccount(target);
+    const callee_code = [_]u8{
+        0x60, 0x01, // PUSH1 1
+        0x00, // STOP
+    };
+    try db.setCode(target, &callee_code);
+
+    var vm = try evm.EVM.initWithState(allocator, 100_000, evm.ExecutionContext.default(), &db);
+    defer vm.deinit();
+
+    const caller = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x0e, // address
+        0x60, 0x00, // requested gas = 0
+        0xfa, // STATICCALL
+    };
+
+    const result = try vm.execute(&caller, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    // STATICCALL never adds stipend (no value parameter).
+    // 6 pushes = 18 gas, base = 700 + 2600(cold) = 3300
+    try testing.expectEqual(@as(u64, 3_318), vm.gas_used);
+}
+
+test "EVM: CALL value to NEW account charges 25000 extra" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var sender = types.Address.zero;
+    sender.bytes[19] = 0xaa;
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.fromU64(1_000_000));
+
+    // Address 0x0f is intentionally NOT created in the state DB.
+    var target = types.Address.zero;
+    target.bytes[19] = 0x0f;
+
+    var ctx = evm.ExecutionContext.default();
+    ctx.address = sender;
+    ctx.caller = sender;
+
+    var vm = try evm.EVM.initWithState(allocator, 200_000, ctx, &db);
+    defer vm.deinit();
+
+    const caller = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x01, // value (non-zero => triggers new account charge)
+        0x60, 0x0f, // address (does not exist)
+        0x60, 0x00, // requested gas = 0
+        0xf1, // CALL
+    };
+
+    const result = try vm.execute(&caller, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const call_success = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 1), call_success.limbs[0]);
+
+    // 7 pushes = 21 gas
+    // CALL base: 700 + 2600(cold) + 9000(value) + 25000(new account) = 37300
+    // Child has stipend=2300 but target has no code => charged_child_gas=0
+    try testing.expectEqual(@as(u64, 37_321), vm.gas_used);
+    try testing.expectEqual(@as(u64, 999_999), (try db.getBalance(sender)).limbs[0]);
+    try testing.expectEqual(@as(u64, 1), (try db.getBalance(target)).limbs[0]);
+}
+
+test "EVM: CALL value insufficient balance fails gracefully" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var sender = types.Address.zero;
+    sender.bytes[19] = 0xaa;
+    try db.createAccount(sender);
+    // Sender has zero balance -- cannot afford value transfer.
+    try db.setBalance(sender, types.U256.zero());
+
+    var target = types.Address.zero;
+    target.bytes[19] = 0x10;
+    try db.createAccount(target);
+
+    var ctx = evm.ExecutionContext.default();
+    ctx.address = sender;
+    ctx.caller = sender;
+
+    var vm = try evm.EVM.initWithState(allocator, 100_000, ctx, &db);
+    defer vm.deinit();
+
+    const caller = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x01, // value = 1 (sender can't afford this)
+        0x60, 0x10, // address (existing account)
+        0x60, 0x00, // requested gas = 0
+        0xf1, // CALL
+    };
+
+    const result = try vm.execute(&caller, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    // Call should return 0 (failure) but NOT cause a hard OOG.
+    const call_success = try vm.stack.pop();
+    try testing.expect(call_success.isZero());
+
+    // Execution itself succeeds (no hard OOG).
+    try testing.expect(result.success);
+
+    // 7 pushes = 21 gas
+    // CALL base: 700 + 2600(cold) + 9000(value) = 12300
+    // No child gas charged (transfer failed before child execution).
+    try testing.expectEqual(@as(u64, 12_321), vm.gas_used);
+
+    // Balances unchanged.
+    try testing.expect((try db.getBalance(sender)).isZero());
+    try testing.expect((try db.getBalance(target)).isZero());
+}
+
+test "EVM: CREATE exact gas accounting for empty init code" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var sender = types.Address.zero;
+    sender.bytes[19] = 0xaa;
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.fromU64(1_000_000));
+
+    var ctx = evm.ExecutionContext.default();
+    ctx.address = sender;
+    ctx.caller = sender;
+
+    var vm = try evm.EVM.initWithState(allocator, 100_000, ctx, &db);
+    defer vm.deinit();
+
+    const caller = [_]u8{
+        0x60, 0x00, // length = 0
+        0x60, 0x00, // offset = 0
+        0x60, 0x00, // value = 0
+        0xf0, // CREATE
+    };
+
+    const result = try vm.execute(&caller, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    // Stack should have the new contract address (non-zero on success).
+    const created_addr = try vm.stack.pop();
+    try testing.expect(!created_addr.isZero());
+
+    // 3 pushes = 9 gas
+    // CREATE base: 32000 + 0(mem) + 0(copy) = 32000
+    // Child executes empty init code => gas_used = 0
+    try testing.expectEqual(@as(u64, 32_009), vm.gas_used);
+}
+
+test "EVM: CREATE2 exact gas with hash cost" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var sender = types.Address.zero;
+    sender.bytes[19] = 0xaa;
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.fromU64(1_000_000));
+
+    var ctx = evm.ExecutionContext.default();
+    ctx.address = sender;
+    ctx.caller = sender;
+
+    var vm = try evm.EVM.initWithState(allocator, 100_000, ctx, &db);
+    defer vm.deinit();
+
+    // Init code is 32 bytes at memory offset 0.
+    // Memory starts empty; readMemoryInput zero-fills, so init code = 32 x 0x00.
+    // First byte 0x00 = STOP, so child halts immediately.
+    const caller = [_]u8{
+        0x60, 0x00, // salt = 0
+        0x60, 0x20, // length = 32
+        0x60, 0x00, // offset = 0
+        0x60, 0x00, // value = 0
+        0xf5, // CREATE2
+    };
+
+    const result = try vm.execute(&caller, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const created_addr = try vm.stack.pop();
+    try testing.expect(!created_addr.isZero());
+
+    // 4 pushes = 12 gas
+    // words = ceil(32/32) = 1
+    // CREATE2 base: 32000 + 3(mem, 1 word) + 3(copy, 1*3) + 6(hash, 1*6) = 32012
+    // Child executes STOP immediately => gas_used = 0
+    try testing.expectEqual(@as(u64, 32_024), vm.gas_used);
+}
+
+test "EVM: nested CALL child refund propagates on success not on failure" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // --- Part 1: child succeeds, parent inherits gas_refund ---
+    {
+        var db = state.StateDB.init(allocator);
+        defer db.deinit();
+
+        var sender = types.Address.zero;
+        sender.bytes[19] = 0xaa;
+        try db.createAccount(sender);
+        try db.setBalance(sender, types.U256.fromU64(1_000_000));
+
+        var child_addr = types.Address.zero;
+        child_addr.bytes[19] = 0x0a;
+        try db.createAccount(child_addr);
+
+        // Pre-set storage slot 0 to value 1 for the child address.
+        try db.setStorage(child_addr, types.U256.zero(), types.U256.one());
+
+        // Child code: SSTORE(slot=0, value=0) then STOP.
+        // Non-zero to zero earns 4800 refund.
+        const child_code = [_]u8{
+            0x60, 0x00, // PUSH1 0 (new value)
+            0x60, 0x00, // PUSH1 0 (slot)
+            0x55, // SSTORE
+            0x00, // STOP
+        };
+        try db.setCode(child_addr, &child_code);
+
+        var ctx = evm.ExecutionContext.default();
+        ctx.address = sender;
+        ctx.caller = sender;
+
+        var vm = try evm.EVM.initWithState(allocator, 200_000, ctx, &db);
+        defer vm.deinit();
+
+        const caller = [_]u8{
+            0x60, 0x00, // outSize
+            0x60, 0x00, // outOffset
+            0x60, 0x00, // inSize
+            0x60, 0x00, // inOffset
+            0x60, 0x00, // value
+            0x60, 0x0a, // address
+            0x61, 0xff, 0xff, // gas = 0xFFFF
+            0xf1, // CALL
+        };
+
+        const result = try vm.execute(&caller, &[_]u8{});
+        defer if (result.return_data.len > 0) allocator.free(result.return_data);
+        defer allocator.free(result.logs);
+
+        const call_success = try vm.stack.pop();
+        try testing.expectEqual(@as(u64, 1), call_success.limbs[0]);
+
+        // Child SSTORE non-zero->zero earns 4800 refund; parent inherits it.
+        try testing.expectEqual(@as(u64, 4_800), vm.gas_refund);
+    }
+
+    // --- Part 2: child reverts, parent gas_refund stays at zero ---
+    {
+        var db = state.StateDB.init(allocator);
+        defer db.deinit();
+
+        var sender = types.Address.zero;
+        sender.bytes[19] = 0xaa;
+        try db.createAccount(sender);
+        try db.setBalance(sender, types.U256.fromU64(1_000_000));
+
+        var child_addr = types.Address.zero;
+        child_addr.bytes[19] = 0x0b;
+        try db.createAccount(child_addr);
+
+        // Pre-set storage slot 0 to value 1 for the child address.
+        try db.setStorage(child_addr, types.U256.zero(), types.U256.one());
+
+        // Child code: SSTORE(slot=0, value=0) then REVERT.
+        // Earns refund in child but REVERT discards it.
+        const child_code = [_]u8{
+            0x60, 0x00, // PUSH1 0 (new value)
+            0x60, 0x00, // PUSH1 0 (slot)
+            0x55, // SSTORE
+            0x60, 0x00, // PUSH1 0 (revert offset)
+            0x60, 0x00, // PUSH1 0 (revert length)
+            0xfd, // REVERT
+        };
+        try db.setCode(child_addr, &child_code);
+
+        var ctx = evm.ExecutionContext.default();
+        ctx.address = sender;
+        ctx.caller = sender;
+
+        var vm = try evm.EVM.initWithState(allocator, 200_000, ctx, &db);
+        defer vm.deinit();
+
+        const caller = [_]u8{
+            0x60, 0x00, // outSize
+            0x60, 0x00, // outOffset
+            0x60, 0x00, // inSize
+            0x60, 0x00, // inOffset
+            0x60, 0x00, // value
+            0x60, 0x0b, // address
+            0x61, 0xff, 0xff, // gas = 0xFFFF
+            0xf1, // CALL
+        };
+
+        const result = try vm.execute(&caller, &[_]u8{});
+        defer if (result.return_data.len > 0) allocator.free(result.return_data);
+        defer allocator.free(result.logs);
+
+        const call_success = try vm.stack.pop();
+        try testing.expect(call_success.isZero());
+
+        // Child reverted, so parent gas_refund must remain unchanged (zero).
+        try testing.expectEqual(@as(u64, 0), vm.gas_refund);
+    }
 }

@@ -34,7 +34,7 @@ pub fn main() !void {
 
     const ref_available = blk: {
         var code: [3]u8 = .{ 0x60, 0x01, 0x00 }; // PUSH1 1, STOP
-        var result = reference.executeWithPyEVM(allocator, &code, &[_]u8{}) catch break :blk false;
+        var result = reference.executeWithPyEVM(allocator, &code, &[_]u8{}, &[_]comparison.ExecutionComparison.StorageEntry{}, &[_]types.U256{}) catch break :blk false;
         result.deinit();
         break :blk true;
     };
@@ -59,13 +59,15 @@ pub fn main() !void {
         var our = comparison.executeOurEVM(allocator, code, calldata, 10_000_000) catch continue;
         defer our.deinit(allocator);
 
-        var ref_result = reference.executeWithPyEVM(allocator, code, calldata) catch continue;
+        var ref_result = reference.executeWithPyEVM(allocator, code, calldata, &[_]comparison.ExecutionComparison.StorageEntry{}, &[_]types.U256{}) catch continue;
         defer ref_result.deinit();
 
         const ref_wrapped = comparison.ExecutionComparison.ReferenceResult{
             .success = ref_result.success,
             .return_data = ref_result.return_data,
             .gas_used = ref_result.gas_used,
+            .stack = ref_result.stack,
+            .storage = ref_result.storage,
         };
 
         try comparison.compareResults(allocator, &our, ref_wrapped);

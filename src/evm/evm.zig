@@ -54,6 +54,8 @@ pub const EVM = struct {
     logs: std.ArrayList(Log),
     // Track warm storage accesses for EIP-2200
     warm_storage: std.AutoHashMap(types.U256, void),
+    // Track original slot values for transaction-scoped SSTORE refund logic.
+    original_storage: std.AutoHashMap(types.U256, types.U256),
     // Track warm account accesses for EIP-2929
     warm_accounts: std.AutoHashMap(types.Address, void),
     // Track SELFDESTRUCTed accounts for one-time refund accounting.
@@ -80,6 +82,7 @@ pub const EVM = struct {
             .context = ExecutionContext.default(),
             .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
             .warm_storage = std.AutoHashMap(types.U256, void).init(allocator),
+            .original_storage = std.AutoHashMap(types.U256, types.U256).init(allocator),
             .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .selfdestructed_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .block_hashes = std.AutoHashMap(u64, types.Hash).init(allocator),
@@ -99,6 +102,7 @@ pub const EVM = struct {
             .context = context,
             .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
             .warm_storage = std.AutoHashMap(types.U256, void).init(allocator),
+            .original_storage = std.AutoHashMap(types.U256, types.U256).init(allocator),
             .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .selfdestructed_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .block_hashes = std.AutoHashMap(u64, types.Hash).init(allocator),
@@ -118,11 +122,69 @@ pub const EVM = struct {
             .context = context,
             .logs = try std.ArrayList(Log).initCapacity(allocator, 0),
             .warm_storage = std.AutoHashMap(types.U256, void).init(allocator),
+            .original_storage = std.AutoHashMap(types.U256, types.U256).init(allocator),
             .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .selfdestructed_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .block_hashes = std.AutoHashMap(u64, types.Hash).init(allocator),
             .state_db = state_db,
         };
+    }
+
+    fn initChildWithState(parent: *EVM, gas_limit: u64, context: ExecutionContext, state_db: *state.StateDB) !EVM {
+        var child = try EVM.initWithState(parent.allocator, gas_limit, context, state_db);
+        errdefer child.deinit();
+
+        child.gas_refund = parent.gas_refund;
+        try child.copyTransactionTrackingFrom(parent);
+        return child;
+    }
+
+    fn copyTransactionTrackingFrom(self: *EVM, other: *const EVM) !void {
+        var warm_storage_it = other.warm_storage.iterator();
+        while (warm_storage_it.next()) |entry| {
+            try self.warm_storage.put(entry.key_ptr.*, {});
+        }
+
+        var original_storage_it = other.original_storage.iterator();
+        while (original_storage_it.next()) |entry| {
+            try self.original_storage.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        var warm_accounts_it = other.warm_accounts.iterator();
+        while (warm_accounts_it.next()) |entry| {
+            try self.warm_accounts.put(entry.key_ptr.*, {});
+        }
+
+        var selfdestruct_it = other.selfdestructed_accounts.iterator();
+        while (selfdestruct_it.next()) |entry| {
+            try self.selfdestructed_accounts.put(entry.key_ptr.*, {});
+        }
+    }
+
+    fn mergeChildTransactionTracking(self: *EVM, child: *const EVM, merge_selfdestructs: bool) !void {
+        var warm_storage_it = child.warm_storage.iterator();
+        while (warm_storage_it.next()) |entry| {
+            try self.warm_storage.put(entry.key_ptr.*, {});
+        }
+
+        var original_storage_it = child.original_storage.iterator();
+        while (original_storage_it.next()) |entry| {
+            if (!self.original_storage.contains(entry.key_ptr.*)) {
+                try self.original_storage.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+        }
+
+        var warm_accounts_it = child.warm_accounts.iterator();
+        while (warm_accounts_it.next()) |entry| {
+            try self.warm_accounts.put(entry.key_ptr.*, {});
+        }
+
+        if (merge_selfdestructs) {
+            var selfdestruct_it = child.selfdestructed_accounts.iterator();
+            while (selfdestruct_it.next()) |entry| {
+                try self.selfdestructed_accounts.put(entry.key_ptr.*, {});
+            }
+        }
     }
 
     pub fn deinit(self: *EVM) void {
@@ -132,6 +194,7 @@ pub const EVM = struct {
         self.storage.deinit();
         self.logs.deinit();
         self.warm_storage.deinit();
+        self.original_storage.deinit();
         self.warm_accounts.deinit();
         self.selfdestructed_accounts.deinit();
         self.block_hashes.deinit();
@@ -1541,28 +1604,26 @@ pub const EVM = struct {
         const bit_pos_u256 = try self.stack.pop();
         const value = try self.stack.pop();
 
-        const bit_pos: u16 = @intCast(bit_pos_u256.limbs[0] & 31); // 0-31 bytes
-        const bit_index: u16 = bit_pos * 8 + 7; // Which bit to check (0-255)
-
-        if (bit_index >= 256) {
-            // No extension needed
+        // Per EVM spec: if byte position >= 31, no extension needed (value is already full-width).
+        // Also if upper limbs are non-zero, byte position is >= 2^64 which is >> 31.
+        if (bit_pos_u256.limbs[1] != 0 or bit_pos_u256.limbs[2] != 0 or bit_pos_u256.limbs[3] != 0 or bit_pos_u256.limbs[0] >= 31) {
             try self.stack.push(self.allocator, value);
             self.gas_used += 5;
             return;
         }
+
+        const bit_pos: u16 = @intCast(bit_pos_u256.limbs[0]); // 0-30 bytes
+        const bit_index: u16 = bit_pos * 8 + 7; // Which bit to check (7-247)
 
         // Check the sign bit in the internal little-endian byte/limb layout.
         const byte_idx = bit_index / 8;
         const bit_in_byte = bit_index % 8;
         const sign_bit = (value.limbs[byte_idx / 8] >> @as(u6, @intCast((byte_idx % 8) * 8 + bit_in_byte))) & 1;
 
-        // If sign bit is 1, extend with 0xFF, else with 0x00
-        var result = value;
-        if (sign_bit == 1) {
-            // Set all bytes above selected byte (more significant bytes) to 0xFF.
-            const mask_start_byte = (bit_index / 8) + 1;
-
-            var mask = types.U256.zero();
+        // Build a mask covering all bytes above the sign byte.
+        const mask_start_byte = (bit_index / 8) + 1;
+        var mask = types.U256.zero();
+        {
             var i: usize = mask_start_byte;
             while (i < 32) : (i += 1) {
                 const limb_idx = i / 8;
@@ -1571,11 +1632,21 @@ pub const EVM = struct {
                     mask.limbs[limb_idx] |= @as(u64, 0xFF) << @as(u6, @intCast(byte_in_limb * 8));
                 }
             }
+        }
 
+        var result = value;
+        if (sign_bit == 1) {
+            // Set all upper bytes to 0xFF.
             result.limbs[0] |= mask.limbs[0];
             result.limbs[1] |= mask.limbs[1];
             result.limbs[2] |= mask.limbs[2];
             result.limbs[3] |= mask.limbs[3];
+        } else {
+            // Clear all upper bytes to 0x00.
+            result.limbs[0] &= ~mask.limbs[0];
+            result.limbs[1] &= ~mask.limbs[1];
+            result.limbs[2] &= ~mask.limbs[2];
+            result.limbs[3] &= ~mask.limbs[3];
         }
 
         try self.stack.push(self.allocator, result);
@@ -1601,22 +1672,14 @@ pub const EVM = struct {
         try self.stack.push(self.allocator, result);
 
         // Gas cost: 10 + 50 * (number of bytes to represent exponent)
-        // Count bytes from LSB (right to left), stopping at first non-zero
-        // This gives us the minimum bytes needed to represent the value
+        // Per EIP-160: byte_size is 0 when exponent is 0.
         const exp_bytes_array = exponent.toBytes();
-        var exp_bytes: u64 = 1; // At least 1 byte
-        var found_significant = false;
-        var i: usize = exp_bytes_array.len;
-        while (i > 0) {
-            i -= 1;
-            if (exp_bytes_array[i] != 0) {
-                found_significant = true;
-                exp_bytes = @as(u64, exp_bytes_array.len - i);
+        var exp_bytes: u64 = 0;
+        for (exp_bytes_array, 0..) |byte, idx| {
+            if (byte != 0) {
+                exp_bytes = @as(u64, exp_bytes_array.len - idx);
                 break;
             }
-        }
-        if (!found_significant) {
-            exp_bytes = 1; // Zero exponent = 1 byte
         }
 
         self.gas_used += 10 + 50 * exp_bytes;
@@ -1648,17 +1711,17 @@ pub const EVM = struct {
     }
 
     fn opSlt(self: *EVM) !void {
-        // Signed less than
+        // SLT: signed(b) < signed(a)  where a = pop (top), b = pop (second)
+        // Convention: result = second OP top (same as SUB, DIV, etc.)
         const a = try self.stack.pop();
         const b = try self.stack.pop();
 
-        // Check if negative (MSB is set)
         const a_is_neg = (a.limbs[3] & 0x8000000000000000) != 0;
         const b_is_neg = (b.limbs[3] & 0x8000000000000000) != 0;
 
         var result: bool = false;
         if (b_is_neg != a_is_neg) {
-            // Different signs: negative < positive
+            // Different signs: b < a iff b is negative
             result = b_is_neg;
         } else {
             // Same sign: compare as unsigned
@@ -1670,17 +1733,16 @@ pub const EVM = struct {
     }
 
     fn opSgt(self: *EVM) !void {
-        // Signed greater than (opposite of SLT)
+        // SGT: signed(b) > signed(a)  where a = pop (top), b = pop (second)
         const a = try self.stack.pop();
         const b = try self.stack.pop();
 
-        // Check if negative (MSB is set)
         const a_is_neg = (a.limbs[3] & 0x8000000000000000) != 0;
         const b_is_neg = (b.limbs[3] & 0x8000000000000000) != 0;
 
         var result: bool = false;
         if (b_is_neg != a_is_neg) {
-            // Different signs: positive > negative
+            // Different signs: b > a iff b is positive
             result = !b_is_neg;
         } else {
             // Same sign: compare as unsigned
@@ -1770,8 +1832,11 @@ pub const EVM = struct {
     fn opShl(self: *EVM) !void {
         const shift_u256 = try self.stack.pop();
         const value = try self.stack.pop();
-        const shift = shift_u256.limbs[0];
-        const result = u256Shl(value, shift);
+        // If any upper limb is non-zero, shift >= 2^64 which is >= 256, so result is 0.
+        const result = if (shift_u256.limbs[1] != 0 or shift_u256.limbs[2] != 0 or shift_u256.limbs[3] != 0)
+            types.U256.zero()
+        else
+            u256Shl(value, shift_u256.limbs[0]);
         try self.stack.push(self.allocator, result);
         self.gas_used += 3;
     }
@@ -1779,8 +1844,10 @@ pub const EVM = struct {
     fn opShr(self: *EVM) !void {
         const shift_u256 = try self.stack.pop();
         const value = try self.stack.pop();
-        const shift = shift_u256.limbs[0];
-        const result = u256Shr(value, shift);
+        const result = if (shift_u256.limbs[1] != 0 or shift_u256.limbs[2] != 0 or shift_u256.limbs[3] != 0)
+            types.U256.zero()
+        else
+            u256Shr(value, shift_u256.limbs[0]);
         try self.stack.push(self.allocator, result);
         self.gas_used += 3;
     }
@@ -1789,9 +1856,14 @@ pub const EVM = struct {
         // SAR (Signed Arithmetic Right Shift): preserves sign bit
         const shift_u256 = try self.stack.pop();
         const value = try self.stack.pop();
-
-        const shift = shift_u256.limbs[0];
-        const result = u256Sar(value, shift);
+        // If shift >= 256 (upper limbs non-zero), return all-1s for negative, 0 for positive.
+        const result = if (shift_u256.limbs[1] != 0 or shift_u256.limbs[2] != 0 or shift_u256.limbs[3] != 0)
+            (if ((value.limbs[3] >> 63) != 0)
+                types.U256{ .limbs = [_]u64{ 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF } }
+            else
+                types.U256.zero())
+        else
+            u256Sar(value, shift_u256.limbs[0]);
         try self.stack.push(self.allocator, result);
         self.gas_used += 3;
     }
@@ -2309,6 +2381,7 @@ pub const EVM = struct {
         callee_address: types.Address,
         caller: types.Address,
         call_value: types.U256,
+        transfer_value: bool,
         requested_gas: u64,
         base_gas: u64,
         add_stipend: bool,
@@ -2345,48 +2418,65 @@ pub const EVM = struct {
             return_data_local = pc_result.output;
             return_data_local_owned = true;
         } else if (self.state_db) |db| {
-            const target_code = db.getCode(code_address);
-            if (target_code.len > 0) {
-                const call_snapshot = try db.snapshot();
-                var call_committed = false;
-                defer if (!call_committed) db.revertToSnapshot(call_snapshot) catch {};
+            const call_snapshot = try db.snapshot();
+            var call_committed = false;
+            defer if (!call_committed) db.revertToSnapshot(call_snapshot) catch {};
 
-                var child_ctx = self.context;
-                child_ctx.caller = caller;
-                child_ctx.origin = self.context.origin;
-                child_ctx.address = callee_address;
-                child_ctx.value = call_value;
-                child_ctx.code = target_code;
-                child_ctx.calldata = calldata;
+            if (transfer_value and !call_value.isZero()) {
+                const caller_balance = db.getBalance(self.context.address) catch types.U256.zero();
+                if (caller_balance.lt(call_value)) {
+                    call_success = false;
+                } else {
+                    try db.setBalance(self.context.address, caller_balance.sub(call_value));
+                    const callee_balance = db.getBalance(callee_address) catch types.U256.zero();
+                    try db.setBalance(callee_address, callee_balance.add(call_value));
+                }
+            }
 
-                var child = try EVM.initWithState(self.allocator, gas_plan.child_limit, child_ctx, db);
-                child.is_static = self.is_static or child_static;
-                defer child.deinit();
+            if (call_success) {
+                const target_code = db.getCode(code_address);
+                if (target_code.len > 0) {
+                    var child_ctx = self.context;
+                    child_ctx.caller = caller;
+                    child_ctx.origin = self.context.origin;
+                    child_ctx.address = callee_address;
+                    child_ctx.value = call_value;
+                    child_ctx.code = target_code;
+                    child_ctx.calldata = calldata;
 
-                const child_result_opt = blk: {
-                    const res = child.execute(target_code, calldata) catch {
-                        call_success = false;
-                        charged_child_gas = gas_plan.child_limit;
-                        // No return data available when child execution fails hard.
-                        return_data_local = &[_]u8{};
-                        break :blk null;
+                    var child = try EVM.initChildWithState(self, gas_plan.child_limit, child_ctx, db);
+                    child.is_static = self.is_static or child_static;
+                    defer child.deinit();
+
+                    const child_result_opt = blk: {
+                        const res = child.execute(target_code, calldata) catch {
+                            call_success = false;
+                            charged_child_gas = gas_plan.child_limit;
+                            // No return data available when child execution fails hard.
+                            return_data_local = &[_]u8{};
+                            break :blk null;
+                        };
+                        break :blk res;
                     };
-                    break :blk res;
-                };
 
-                if (child_result_opt) |child_result| {
-                    return_data_local = try self.allocator.dupe(u8, child_result.return_data);
-                    return_data_local_owned = true;
-                    self.allocator.free(child_result.return_data);
-                    child_logs = child_result.logs;
-                    call_success = child_result.success;
-                    charged_child_gas = @min(child_result.gas_used, gas_plan.child_limit);
-                    if (child_result.success) {
-                        try db.commitSnapshot(call_snapshot);
-                        call_committed = true;
-                        self.gas_refund += child_result.gas_refund;
+                    if (child_result_opt) |child_result| {
+                        return_data_local = try self.allocator.dupe(u8, child_result.return_data);
+                        return_data_local_owned = true;
+                        self.allocator.free(child_result.return_data);
+                        child_logs = child_result.logs;
+                        call_success = child_result.success;
+                        charged_child_gas = @min(child_result.gas_used, gas_plan.child_limit);
+                        try self.mergeChildTransactionTracking(&child, child_result.success);
+                        if (child_result.success) {
+                            self.gas_refund = child_result.gas_refund;
+                        }
                     }
                 }
+            }
+
+            if (call_success) {
+                try db.commitSnapshot(call_snapshot);
+                call_committed = true;
             }
         }
 
@@ -2432,6 +2522,7 @@ pub const EVM = struct {
             target,
             self.context.address,
             value,
+            true,
             gas.limbs[0],
             base_gas,
             true,
@@ -2458,6 +2549,7 @@ pub const EVM = struct {
             target,
             self.context.address,
             types.U256.zero(),
+            false,
             gas.limbs[0],
             base_gas,
             false,
@@ -2489,6 +2581,7 @@ pub const EVM = struct {
             self.context.address,
             self.context.address,
             value,
+            true,
             gas.limbs[0],
             base_gas,
             true,
@@ -2515,6 +2608,7 @@ pub const EVM = struct {
             self.context.address,
             self.context.caller,
             self.context.value,
+            false,
             gas.limbs[0],
             base_gas,
             false,
@@ -2562,6 +2656,12 @@ pub const EVM = struct {
 
         const creator_nonce = db.getNonce(self.context.address) catch 0;
         const new_address = deriveCreateAddress(self.context.address, creator_nonce);
+        const existing_nonce = db.getNonce(new_address) catch 0;
+        if (existing_nonce != 0 or db.getCode(new_address).len != 0) {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += create_gas;
+            return;
+        }
 
         // Value transfer from creator to new account.
         if (!value.isZero()) {
@@ -2586,7 +2686,7 @@ pub const EVM = struct {
         child_ctx.calldata = &[_]u8{};
         child_ctx.code = init_code;
 
-        var child = try EVM.initWithState(self.allocator, child_gas_limit, child_ctx, db);
+        var child = try EVM.initChildWithState(self, child_gas_limit, child_ctx, db);
         defer child.deinit();
 
         const child_result = child.execute(init_code, &[_]u8{}) catch {
@@ -2606,7 +2706,8 @@ pub const EVM = struct {
         try db.setCode(new_address, child_result.return_data);
         try self.setReturnData(child_result.return_data);
         try self.stack.push(self.allocator, addressToU256(new_address));
-        self.gas_refund += child_result.gas_refund;
+        try self.mergeChildTransactionTracking(&child, true);
+        self.gas_refund = child_result.gas_refund;
         self.gas_used += create_gas + @min(child_result.gas_used, child_gas_limit);
         try db.commitSnapshot(create_snapshot);
         create_committed = true;
@@ -2648,6 +2749,12 @@ pub const EVM = struct {
         defer if (!create2_committed) db.revertToSnapshot(create2_snapshot) catch {};
 
         const new_address = deriveCreate2Address(self.context.address, salt, init_code);
+        const existing_nonce = db.getNonce(new_address) catch 0;
+        if (existing_nonce != 0 or db.getCode(new_address).len != 0) {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += create2_gas;
+            return;
+        }
 
         if (!value.isZero()) {
             const creator_balance = db.getBalance(self.context.address) catch types.U256.zero();
@@ -2670,7 +2777,7 @@ pub const EVM = struct {
         child_ctx.calldata = &[_]u8{};
         child_ctx.code = init_code;
 
-        var child = try EVM.initWithState(self.allocator, child_gas_limit, child_ctx, db);
+        var child = try EVM.initChildWithState(self, child_gas_limit, child_ctx, db);
         defer child.deinit();
 
         const child_result = child.execute(init_code, &[_]u8{}) catch {
@@ -2690,7 +2797,8 @@ pub const EVM = struct {
         try db.setCode(new_address, child_result.return_data);
         try self.setReturnData(child_result.return_data);
         try self.stack.push(self.allocator, addressToU256(new_address));
-        self.gas_refund += child_result.gas_refund;
+        try self.mergeChildTransactionTracking(&child, true);
+        self.gas_refund = child_result.gas_refund;
         self.gas_used += create2_gas + @min(child_result.gas_used, child_gas_limit);
         try db.commitSnapshot(create2_snapshot);
         create2_committed = true;
@@ -2842,6 +2950,11 @@ pub const EVM = struct {
 
         const warm_key = storageWarmKey(self.context.address, key);
         const is_warm = self.warm_storage.contains(warm_key);
+        const original_value = blk: {
+            if (self.original_storage.get(warm_key)) |value| break :blk value;
+            try self.original_storage.put(warm_key, current_value);
+            break :blk current_value;
+        };
 
         // EIP-2929: Charge cold access cost if this is the first access in transaction
         if (!is_warm) {
@@ -2849,32 +2962,36 @@ pub const EVM = struct {
             try self.warm_storage.put(warm_key, {}); // Mark as warm for subsequent accesses
         }
 
-        // EIP-2200: SSTORE operation costs based on value transitions
+        // EIP-2200/EIP-3529: transaction-scoped SSTORE operation/refund rules.
         if (current_value.eq(new_value)) {
-            // No change: additional cost (cold access already charged above)
-            if (is_warm) {
-                self.gas_used += 100; // Warm: just operation cost
-            }
-            // Cold: already charged 2100 above, no additional cost for no-change
-        } else if (!current_value.isZero() and new_value.isZero()) {
-            // Delete: operation cost
-            if (is_warm) {
-                self.gas_used += 100; // Warm delete
+            self.gas_used += 100;
+        } else if (original_value.eq(current_value)) {
+            if (original_value.isZero()) {
+                self.gas_used += 20_000;
             } else {
-                // Cold delete: 2100 already charged, operation cost is 0 (refund case)
+                self.gas_used += 2_900;
+                if (new_value.isZero()) {
+                    self.gas_refund += 4_800;
+                }
             }
-            // EIP-3529: SSTORE clear refund
-            self.gas_refund += 4800;
-        } else if (current_value.isZero() and !new_value.isZero()) {
-            // Set new value: 20000 gas for the SSTORE operation
-            self.gas_used += 20000;
         } else {
-            // Update existing value: operation cost
-            if (is_warm) {
-                self.gas_used += 5000; // Warm update
-            } else {
-                // Cold update: 2100 already charged, add operation cost
-                self.gas_used += 800; // 2900 - 2100 = 800 (since we already charged cold access)
+            self.gas_used += 100;
+
+            if (!original_value.isZero()) {
+                if (current_value.isZero()) {
+                    self.gas_refund -|= 4_800;
+                }
+                if (new_value.isZero()) {
+                    self.gas_refund += 4_800;
+                }
+            }
+
+            if (new_value.eq(original_value)) {
+                if (original_value.isZero()) {
+                    self.gas_refund += 19_900;
+                } else {
+                    self.gas_refund += 2_800;
+                }
             }
         }
 

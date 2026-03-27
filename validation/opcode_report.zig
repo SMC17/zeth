@@ -87,7 +87,14 @@ pub fn main() !void {
         const prepared = try comparison.prepareOpcodeCase(allocator, tc);
         defer prepared.deinit(allocator);
 
-        var our = try comparison.executeOurEVM(allocator, prepared.code, prepared.calldata, 1_000_000);
+        var our = try comparison.executeOurEVMWithPrestate(
+            allocator,
+            prepared.code,
+            prepared.calldata,
+            1_000_000,
+            tc.pre_storage,
+            tc.tracked_storage,
+        );
         defer our.deinit(allocator);
 
         if (our.our_error != null) {
@@ -106,7 +113,13 @@ pub fn main() !void {
         }
 
         if (pyevm_available) {
-            var ref_result = reference.executeWithPyEVM(allocator, prepared.code, prepared.calldata) catch null;
+            var ref_result = reference.executeWithPyEVM(
+                allocator,
+                prepared.code,
+                prepared.calldata,
+                tc.pre_storage,
+                tc.tracked_storage,
+            ) catch null;
             if (ref_result) |*rr| {
                 defer rr.deinit();
                 compared_ref = true;
@@ -116,8 +129,15 @@ pub fn main() !void {
                 if (our.our_error != null) {
                     ref_match = false;
                 } else {
-                    ref_match = our.our_result.success == rr.success and
-                        std.mem.eql(u8, our.our_result.return_data, rr.return_data);
+                    const ref_wrapped = comparison.ExecutionComparison.ReferenceResult{
+                        .success = rr.success,
+                        .return_data = rr.return_data,
+                        .gas_used = rr.gas_used,
+                        .stack = rr.stack,
+                        .storage = rr.storage,
+                    };
+                    try comparison.compareResults(allocator, &our, ref_wrapped);
+                    ref_match = our.matches;
                 }
                 if (!ref_match) {
                     ref_mismatches += 1;

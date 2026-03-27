@@ -10,6 +10,8 @@ jobs:
   test:
     name: Test Suite
     runs-on: ubuntu-latest
+    env:
+      STRICT_VALIDATION: '1'
     
     steps:
     - uses: actions/checkout@v4
@@ -18,6 +20,14 @@ jobs:
       uses: goto-bus-stop/setup-zig@v2
       with:
         version: 0.14.1
+
+    - name: Prepare Validation Dependencies
+      run: |
+        mkdir -p artifacts
+        pip3 install eth-py-evm
+        if [ ! -d ethereum-tests/.git ]; then
+          git clone --depth 1 https://github.com/ethereum/tests ethereum-tests
+        fi
     
     - name: Run All Tests
       run: zig build test
@@ -49,35 +59,43 @@ jobs:
     - name: Validate VMTests
       run: |
         if [ -d ethereum-tests/VMTests ]; then
-          zig build validate-vm
+          zig build validate-vm -- --summary-json artifacts/vmtest_summary.json
         else
           echo "ethereum-tests VMTests not available, skipping validate-vm (clone https://github.com/ethereum/tests ethereum-tests)"
+          printf '{\n  "total": 0,\n  "passed": 0,\n  "failed": 0,\n  "tests_dir": "ethereum-tests",\n  "generated_at": 0,\n  "skipped": true\n}\n' > artifacts/vmtest_summary.json
         fi
 
     - name: Vector pipeline (convert + regression)
       run: |
         if [ -d ethereum-tests/VMTests ]; then
-          zig build validate-vm -- --convert --out validation/test_vectors/generated.json || true
+          zig build validate-vm -- --convert --out validation/test_vectors/generated.json
           if [ -f validation/test_vectors/generated.json ]; then
-            zig build vector-run -- validation/test_vectors/generated.json || echo "Vector run had failures"
+            zig build vector-run -- validation/test_vectors/generated.json
           fi
         else
           echo "Skipping vector pipeline (no ethereum-tests)"
         fi
 
-    - name: Differential Fuzz (best effort)
+    - name: Differential Fuzz
       run: |
         if python3 -c "import eth" 2>/dev/null; then
-          zig build differential-fuzz -- 50 --no-fail || true
+          zig build differential-fuzz -- 50 --no-fail
         else
           echo "PyEVM not available, skipping differential fuzz"
         fi
 
     - name: Run Reference Comparison Tests
       run: |
-        pip3 install eth-py-evm || echo "PyEVM not available, skipping reference tests"
         zig build
-        ./zig-out/bin/run_reference_tests || echo "Reference tests skipped (PyEVM may not be available)"
+        ./zig-out/bin/run_reference_tests \
+          --discrepancy-out artifacts/zeth_discrepancies.txt \
+          --discrepancy-json artifacts/zeth_discrepancies.json \
+          --summary-json artifacts/reference_summary.json \
+          --require-reference
+
+    - name: Enforce Reference Discrepancy Baseline
+      run: |
+        zig build regression-gate -- validation/baselines/reference_discrepancies.json artifacts/zeth_discrepancies.json
 
     - name: Generate Opcode/Gas Report (JSON)
       run: |
@@ -123,6 +141,13 @@ jobs:
       run: |
         jq -e 'if .summary.reference_compared > 0 then (.summary.reference_mismatches == 0) else true end' artifacts/opcode_report.json
 
+    - name: Enforce Validation Coverage Visibility
+      run: |
+        jq . artifacts/vmtest_summary.json
+        jq . artifacts/reference_summary.json
+        jq -e '.total > 0 and .failed == 0' artifacts/vmtest_summary.json
+        jq -e '.reference_available == true and .tests_run > 0 and .discrepancy_count == 0' artifacts/reference_summary.json
+
     - name: Upload Opcode Report
       uses: actions/upload-artifact@v4
       with:
@@ -137,10 +162,23 @@ jobs:
         path: artifacts/precompile_differential_report.json
         if-no-files-found: error
 
+    - name: Upload Validation Summaries
+      uses: actions/upload-artifact@v4
+      with:
+        name: validation-summaries
+        path: |
+          artifacts/vmtest_summary.json
+          artifacts/reference_summary.json
+          artifacts/zeth_discrepancies.json
+          artifacts/zeth_discrepancies.txt
+        if-no-files-found: error
+
   differential:
     name: Differential (Geth/PyEVM)
     runs-on: ubuntu-latest
     needs: test
+    env:
+      STRICT_VALIDATION: '1'
 
     steps:
     - uses: actions/checkout@v4
@@ -150,8 +188,8 @@ jobs:
       with:
         version: 0.14.1
 
-    - name: Install PyEVM (best effort)
-      run: pip3 install eth-py-evm || true
+    - name: Install PyEVM
+      run: pip3 install eth-py-evm
 
     - name: Build Reference Runner
       run: zig build
@@ -167,18 +205,34 @@ jobs:
 
     - name: Run Differential Tests
       if: steps.refs.outputs.available == 'true'
-      run: ./zig-out/bin/run_reference_tests
+      run: |
+        mkdir -p artifacts
+        ./zig-out/bin/run_reference_tests \
+          --discrepancy-out artifacts/zeth_discrepancies.txt \
+          --discrepancy-json artifacts/zeth_discrepancies.json \
+          --summary-json artifacts/reference_summary.json \
+          --require-reference
+
+    - name: Enforce Differential Baseline
+      if: steps.refs.outputs.available == 'true'
+      run: |
+        zig build regression-gate -- validation/baselines/reference_discrepancies.json artifacts/zeth_discrepancies.json
 
     - name: Skip Differential Tests
       if: steps.refs.outputs.available != 'true'
-      run: echo "No reference implementation available; differential job skipped by gate."
+      run: |
+        echo "No reference implementation available; differential job skipped by gate."
+        exit 1
 
     - name: Upload Discrepancy Report
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: differential-discrepancies
-        path: /tmp/zeth_discrepancies.txt
+        path: |
+          artifacts/zeth_discrepancies.txt
+          artifacts/zeth_discrepancies.json
+          artifacts/reference_summary.json
         if-no-files-found: ignore
 
   lint:

@@ -8,21 +8,22 @@ Zeth is a Zig EVM focused on correctness-first execution semantics, differential
 
 ## Current Reality
 
-As of **February 24, 2026** (`084c26e`):
+As of **March 26, 2026** (`381f677`+):
 
-- Toolchain is pinned to `Zig 0.14.1`.
-- `zig build test` passes locally.
-- EVM includes call/create execution paths, precompile routing (`0x01..0x09`), and expanded gas tests.
-- Static-context write prohibitions are enforced for `SSTORE`, `LOG*`, `CREATE*`, `SELFDESTRUCT`, and value-carrying `CALL`/`CALLCODE`.
-- CI publishes machine-readable validation artifacts for opcode and precompile differential reporting.
+- Toolchain: `Zig 0.14.1`. `zig build test` passes (263 tests, 0 failures).
+- Full EVM opcode dispatch (142/143 opcodes), precompile routing (`0x01..0x09`).
+- Gas correctness: exact-equality golden tests for CALL*/CREATE* stipend/refund edges, SELFDESTRUCT accounting, memory expansion boundaries, SSTORE EIP-2200/EIP-2929 refund logic.
+- State journaling: transaction-scoped snapshot/commit/revert with nested call isolation, proven through integration tests covering storage, balance, nonce, code, and selfdestruct lifecycle.
+- Parity: signed arithmetic (SDIV/SMOD overflow, sign propagation), SIGNEXTEND, SHL/SHR/SAR shift-by-256+, BALANCE/EXTCODE*/BLOCKHASH edge semantics.
+- Static-context write prohibitions enforced for `SSTORE`, `LOG*`, `CREATE*`, `SELFDESTRUCT`, and value-carrying `CALL`/`CALLCODE`.
+- CI publishes machine-readable validation artifacts with regression gates.
+- Cross-compilation: WASM (wasm32-wasi) and RISC-V (riscv64-linux) targets build in CI.
 
 For measured details, use:
 
 - `STATUS_SUMMARY.md`
 - `zig build opcode-report -- --format json`
 - GitHub Actions artifacts (`opcode_report.json`, `precompile_differential_report.json`)
-
-For local-only research drafts not yet accepted as canonical docs, use `.local_docs_archive/` (gitignored).
 
 ## Quick Start
 
@@ -71,10 +72,10 @@ zig build validate-vm
 
 Current execution order:
 
-1. Finish gas correctness closure (`CALL*`, `CREATE*`, `SELFDESTRUCT`, memory expansion/refund edge cases)
-2. State journaling and nested snapshot commit/revert semantics
-3. High-impact opcode parity closure (remaining edge semantics + precompiles beyond current corpus)
-4. Differential validation hardening and CI regression gates (broader corpus, machine-readable reports)
+1. ~~Gas correctness closure~~ (done)
+2. ~~State journaling and nested snapshot commit/revert~~ (done)
+3. ~~High-impact opcode parity closure~~ (done)
+4. Differential validation hardening and CI regression gates (in progress)
 5. Strategic tracks (`zeth-sim`, `zeth-wasm`, then `zeth-prove`)
 
 ## Documentation Map

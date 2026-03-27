@@ -145,6 +145,51 @@ pub const DiscrepancyTracker = struct {
 
         _ = try file.write(report);
     }
+
+    pub fn writeJson(self: *const DiscrepancyTracker, writer: anytype) !void {
+        try writer.writeAll("{\n");
+        try writer.print("  \"summary\": {{\n", .{});
+        try writer.print("    \"total\": {},\n", .{self.count()});
+        try writer.print("    \"critical\": {},\n", .{self.countBySeverity(.critical)});
+        try writer.print("    \"high\": {},\n", .{self.countBySeverity(.high)});
+        try writer.print("    \"medium\": {},\n", .{self.countBySeverity(.medium)});
+        try writer.print("    \"low\": {}\n", .{self.countBySeverity(.low)});
+        try writer.writeAll("  },\n");
+        try writer.writeAll("  \"discrepancies\": [\n");
+
+        for (self.discrepancies.items, 0..) |disc, idx| {
+            try writer.writeAll("    {\n");
+            try writer.print("      \"opcode\": \"{s}\",\n", .{disc.opcode});
+            try writer.print("      \"type\": \"{s}\",\n", .{@tagName(disc.type)});
+            try writer.print("      \"severity\": \"{s}\",\n", .{@tagName(disc.severity)});
+            try writer.print("      \"description\": ", .{});
+            try std.json.stringify(disc.description, .{}, writer);
+            try writer.writeAll(",\n");
+            try writer.print("      \"our_value\": ", .{});
+            try std.json.stringify(disc.our_value, .{}, writer);
+            try writer.writeAll(",\n");
+            try writer.print("      \"reference_value\": ", .{});
+            try std.json.stringify(disc.reference_value, .{}, writer);
+            try writer.writeAll(",\n");
+            try writer.print("      \"bytecode\": ", .{});
+            try std.json.stringify(disc.bytecode, .{}, writer);
+            try writer.writeAll(",\n");
+            try writer.print("      \"calldata\": ", .{});
+            try std.json.stringify(disc.calldata, .{}, writer);
+            try writer.writeAll(",\n");
+            try writer.print("      \"fixed\": {}\n", .{disc.fixed});
+            try writer.writeAll(if (idx + 1 == self.discrepancies.items.len) "    }\n" else "    },\n");
+        }
+
+        try writer.writeAll("  ]\n");
+        try writer.writeAll("}\n");
+    }
+
+    pub fn saveJsonToFile(self: *const DiscrepancyTracker, file_path: []const u8) !void {
+        var file = try std.fs.cwd().createFile(file_path, .{});
+        defer file.close();
+        try self.writeJson(file.writer());
+    }
 };
 
 const testing = std.testing;

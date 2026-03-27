@@ -36,11 +36,24 @@ pub const TestRunner = struct {
         // Execute on our EVM
         const prepared = try comparison.prepareOpcodeCase(self.allocator, test_case);
         defer prepared.deinit(self.allocator);
-        var our_result = try comparison.executeOurEVM(self.allocator, prepared.code, prepared.calldata, 1000000);
+        var our_result = try comparison.executeOurEVMWithPrestate(
+            self.allocator,
+            prepared.code,
+            prepared.calldata,
+            1000000,
+            test_case.pre_storage,
+            test_case.tracked_storage,
+        );
         defer our_result.deinit(self.allocator);
 
         // Try to execute on reference (PyEVM or Geth)
-        var ref_result = reference.executeWithPyEVM(self.allocator, prepared.code, prepared.calldata) catch |err| {
+        var ref_result = reference.executeWithPyEVM(
+            self.allocator,
+            prepared.code,
+            prepared.calldata,
+            test_case.pre_storage,
+            test_case.tracked_storage,
+        ) catch |err| {
             // Reference not available - skip comparison but mark test as run
             std.debug.print("Reference not available for {s}: {}\n", .{ test_case.name, err });
             return;
@@ -52,6 +65,8 @@ pub const TestRunner = struct {
             .success = ref_result.success,
             .return_data = ref_result.return_data,
             .gas_used = ref_result.gas_used,
+            .stack = ref_result.stack,
+            .storage = ref_result.storage,
         };
 
         try comparison.compareResults(self.allocator, &our_result, ref_result_wrapped);
