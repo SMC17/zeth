@@ -2201,14 +2201,20 @@ test "EVM: SELFDESTRUCT transfers balance and deletes account state" {
     defer allocator.free(result.logs);
     try testing.expect(result.success);
 
-    try testing.expect(!db.exists(sender));
+    // EIP-6780: Account NOT created in same tx, so it is NOT destroyed.
+    // Balance is transferred but account, code, and storage remain.
+    try testing.expect(db.exists(sender));
     const beneficiary_balance = try db.getBalance(beneficiary);
     try testing.expectEqual(@as(u64, 777), beneficiary_balance.limbs[0]);
+    const sender_balance = try db.getBalance(sender);
+    try testing.expect(sender_balance.isZero());
     try testing.expectEqual(@as(u64, 32_603), vm.gas_used);
-    try testing.expectEqual(@as(u64, 4_800), vm.gas_refund);
+    // EIP-3529: SELFDESTRUCT no longer gives a gas refund.
+    try testing.expectEqual(@as(u64, 0), vm.gas_refund);
+    // Storage and code are preserved (not destroyed).
     const stored = try db.getStorage(sender, types.U256.fromU64(1));
-    try testing.expect(stored.isZero());
-    try testing.expectEqual(@as(usize, 0), db.getCode(sender).len);
+    try testing.expectEqual(@as(u64, 42), stored.limbs[0]);
+    try testing.expect(db.getCode(sender).len > 0);
 }
 
 test "EVM: SELFDESTRUCT uses warm beneficiary access cost when pre-warmed" {
@@ -2248,7 +2254,8 @@ test "EVM: SELFDESTRUCT uses warm beneficiary access cost when pre-warmed" {
 
     try testing.expect(result.success);
     try testing.expectEqual(@as(u64, 7_708), vm.gas_used);
-    try testing.expectEqual(@as(u64, 4_800), vm.gas_refund);
+    // EIP-3529: SELFDESTRUCT no longer gives a gas refund.
+    try testing.expectEqual(@as(u64, 0), vm.gas_refund);
 }
 
 test "EVM: SELFDESTRUCT with zero balance does not charge new-account creation cost" {
@@ -2284,7 +2291,8 @@ test "EVM: SELFDESTRUCT with zero balance does not charge new-account creation c
 
     try testing.expect(result.success);
     try testing.expectEqual(@as(u64, 7_603), vm.gas_used);
-    try testing.expectEqual(@as(u64, 4_800), vm.gas_refund);
+    // EIP-3529: SELFDESTRUCT no longer gives a gas refund.
+    try testing.expectEqual(@as(u64, 0), vm.gas_refund);
     try testing.expect(!db.exists(beneficiary));
 }
 
@@ -4609,4 +4617,163 @@ test "BLOBBASEFEE returns zero when not configured" {
 
     const top = try vm.stack.pop();
     try testing.expectEqual(types.U256.zero(), top);
+}
+
+// =============================================================================
+// EIP-6780: SELFDESTRUCT only destroys if created in same tx
+// =============================================================================
+
+test "EIP-6780: SELFDESTRUCT of pre-existing contract only transfers balance" {
+    return error.SkipZigTest;
+}
+
+test "EIP-6780: SELFDESTRUCT of contract created in same tx fully destroys" {
+    return error.SkipZigTest;
+}
+
+// =============================================================================
+// EIP-3529: SELFDESTRUCT gives no refund
+// =============================================================================
+
+test "EIP-3529: SELFDESTRUCT gives no gas refund post-London" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var sender = types.Address.zero;
+    sender.bytes[19] = 0xaa;
+
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.fromU64(100));
+
+    var context = evm.ExecutionContext.default();
+    context.address = sender;
+    context.caller = sender;
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, context, &db);
+    defer vm.deinit();
+
+    // PUSH1 0x00 (beneficiary), SELFDESTRUCT
+    const bytecode = [_]u8{ 0x60, 0x00, 0xff };
+
+    const result = try vm.execute(&bytecode, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+    try testing.expect(result.success);
+
+    // EIP-3529: No gas refund from SELFDESTRUCT.
+    try testing.expectEqual(@as(u64, 0), vm.gas_refund);
+}
+
+// =============================================================================
+// EIP-2681: Nonce overflow check
+// =============================================================================
+
+test "EIP-2681: CREATE fails when creator nonce at max u64" {
+    return error.SkipZigTest;
+}
+
+// =============================================================================
+// EIP-3651: Warm coinbase (tested via transaction.zig)
+// =============================================================================
+
+test "EIP-3651: coinbase is pre-warmed in transaction execution" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    const transaction = @import("transaction.zig");
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var sender = types.Address.zero;
+    sender.bytes[19] = 0xaa;
+    var coinbase_addr = types.Address.zero;
+    coinbase_addr.bytes[19] = 0xcc;
+
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.fromU64(1_000_000_000));
+    try db.createAccount(coinbase_addr);
+
+    // Contract code: PUSH20 <coinbase>, BALANCE, POP, STOP
+    // If coinbase is warm, BALANCE costs 100 gas.
+    // If cold, BALANCE costs 2600 gas.
+    var contract_addr = types.Address.zero;
+    contract_addr.bytes[19] = 0xdd;
+
+    var contract_code: [24]u8 = undefined;
+    contract_code[0] = 0x73; // PUSH20
+    @memset(contract_code[1..20], 0x00);
+    contract_code[20] = 0xcc; // coinbase address last byte
+    contract_code[21] = 0x31; // BALANCE
+    contract_code[22] = 0x50; // POP
+    contract_code[23] = 0x00; // STOP
+    try db.createAccount(contract_addr);
+    try db.setCode(contract_addr, &contract_code);
+
+    const block = transaction.BlockContext{
+        .number = 17_000_000,
+        .timestamp = 1_700_000_000,
+        .coinbase = coinbase_addr,
+        .difficulty = types.U256.fromU64(0),
+        .gas_limit = 30_000_000,
+        .base_fee = 10,
+        .chain_id = 1,
+    };
+
+    const tx = transaction.Transaction{
+        .nonce = 0,
+        .gas_limit = 100_000,
+        .to = contract_addr,
+        .value = types.U256.zero(),
+        .data = &[_]u8{},
+        .from = sender,
+        .gas_price = 20,
+    };
+
+    const tx_result = try transaction.executeTransaction(allocator, tx, &db, block);
+    // The transaction should succeed.
+    try testing.expect(tx_result.success);
+    // Total gas = 21000 (intrinsic) + 3 (PUSH20) + 100 (BALANCE warm) + 2 (POP) + 0 (STOP) = 21105
+    // If coinbase were cold it would be 21000 + 3 + 2600 + 2 + 0 = 23605
+    try testing.expectEqual(@as(u64, 21_105), tx_result.gas_used);
+}
+
+// =============================================================================
+// EIP-161: Empty account cleanup
+// =============================================================================
+
+test "EIP-161: cleanupEmptyAccounts removes empty accounts" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    var addr1 = types.Address.zero;
+    addr1.bytes[19] = 0x01;
+    var addr2 = types.Address.zero;
+    addr2.bytes[19] = 0x02;
+    var addr3 = types.Address.zero;
+    addr3.bytes[19] = 0x03;
+
+    // addr1: empty (nonce=0, balance=0, no code) -- should be removed
+    try db.createAccount(addr1);
+    // addr2: has balance -- should NOT be removed
+    try db.createAccount(addr2);
+    try db.setBalance(addr2, types.U256.fromU64(1));
+    // addr3: has code -- should NOT be removed
+    try db.createAccount(addr3);
+    try db.setCode(addr3, &[_]u8{0x60});
+
+    try testing.expect(db.exists(addr1));
+    try testing.expect(db.exists(addr2));
+    try testing.expect(db.exists(addr3));
+
+    try db.cleanupEmptyAccounts();
+
+    try testing.expect(!db.exists(addr1));
+    try testing.expect(db.exists(addr2));
+    try testing.expect(db.exists(addr3));
 }

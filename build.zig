@@ -23,6 +23,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const mpt_mod = b.addModule("mpt", .{
+        .root_source_file = b.path("src/state/mpt.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    mpt_mod.addImport("crypto", crypto_mod);
+    mpt_mod.addImport("rlp", rlp_mod);
+
     const state_mod = b.addModule("state", .{
         .root_source_file = b.path("src/state/state.zig"),
         .target = target,
@@ -31,6 +39,7 @@ pub fn build(b: *std.Build) void {
     state_mod.addImport("types", types_mod);
     state_mod.addImport("crypto", crypto_mod);
     state_mod.addImport("rlp", rlp_mod);
+    state_mod.addImport("mpt", mpt_mod);
 
     const evm_mod = b.addModule("evm", .{
         .root_source_file = b.path("src/evm/evm.zig"),
@@ -51,6 +60,28 @@ pub fn build(b: *std.Build) void {
     transaction_mod.addImport("state", state_mod);
     transaction_mod.addImport("evm", evm_mod);
 
+    const receipt_mod = b.addModule("receipt", .{
+        .root_source_file = b.path("src/evm/receipt.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    receipt_mod.addImport("types", types_mod);
+    receipt_mod.addImport("crypto", crypto_mod);
+    receipt_mod.addImport("evm", evm_mod);
+    receipt_mod.addImport("transaction", transaction_mod);
+    receipt_mod.addImport("rlp", rlp_mod);
+
+    const block_mod = b.addModule("block", .{
+        .root_source_file = b.path("src/evm/block.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    block_mod.addImport("types", types_mod);
+    block_mod.addImport("state", state_mod);
+    block_mod.addImport("evm", evm_mod);
+    block_mod.addImport("transaction", transaction_mod);
+    block_mod.addImport("receipt", receipt_mod);
+
     const sim_mod = b.addModule("sim", .{
         .root_source_file = b.path("src/sim.zig"),
         .target = target,
@@ -59,6 +90,16 @@ pub fn build(b: *std.Build) void {
     sim_mod.addImport("evm", evm_mod);
     sim_mod.addImport("types", types_mod);
     sim_mod.addImport("state", state_mod);
+
+    // JSON-RPC server module
+    const rpc_mod = b.addModule("rpc", .{
+        .root_source_file = b.path("src/rpc/server.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    rpc_mod.addImport("sim", sim_mod);
+    rpc_mod.addImport("types", types_mod);
+    rpc_mod.addImport("state", state_mod);
 
     // zkVM guest module (native target for tests; rv32 target for proving)
     const zkvm_mod = b.addModule("zkvm", .{
@@ -430,6 +471,13 @@ pub fn build(b: *std.Build) void {
     const run_evm_tests = b.addRunArtifact(evm_tests);
     test_step.dependOn(&run_evm_tests.step);
 
+    // MPT tests
+    const mpt_tests = b.addTest(.{
+        .root_module = mpt_mod,
+    });
+    const run_mpt_tests = b.addRunArtifact(mpt_tests);
+    test_step.dependOn(&run_mpt_tests.step);
+
     // State tests
     const state_tests = b.addTest(.{
         .root_module = state_mod,
@@ -636,12 +684,77 @@ pub fn build(b: *std.Build) void {
     const run_transaction_tests = b.addRunArtifact(transaction_tests);
     test_step.dependOn(&run_transaction_tests.step);
 
+    // Receipt tests (bloom filter, receipt generation)
+    const receipt_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/evm/receipt.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    receipt_test_mod.addImport("types", types_mod);
+    receipt_test_mod.addImport("crypto", crypto_mod);
+    receipt_test_mod.addImport("evm", evm_mod);
+    receipt_test_mod.addImport("transaction", transaction_mod);
+    receipt_test_mod.addImport("rlp", rlp_mod);
+
+    const receipt_tests = b.addTest(.{
+        .root_module = receipt_test_mod,
+    });
+    const run_receipt_tests = b.addRunArtifact(receipt_tests);
+    test_step.dependOn(&run_receipt_tests.step);
+
+    // Block execution tests
+    const block_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/evm/block.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    block_test_mod.addImport("types", types_mod);
+    block_test_mod.addImport("state", state_mod);
+    block_test_mod.addImport("evm", evm_mod);
+    block_test_mod.addImport("transaction", transaction_mod);
+    block_test_mod.addImport("receipt", receipt_mod);
+
+    const block_tests = b.addTest(.{
+        .root_module = block_test_mod,
+    });
+    const run_block_tests = b.addRunArtifact(block_tests);
+    test_step.dependOn(&run_block_tests.step);
+
+    // Tracer tests
+    const tracer_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/evm/tracer.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    tracer_test_mod.addImport("types", types_mod);
+
+    const tracer_tests = b.addTest(.{
+        .root_module = tracer_test_mod,
+    });
+    const run_tracer_tests = b.addRunArtifact(tracer_tests);
+    test_step.dependOn(&run_tracer_tests.step);
+
     // EVMC bridge tests
     const evmc_tests = b.addTest(.{
         .root_module = evmc_test_mod,
     });
     const run_evmc_tests = b.addRunArtifact(evmc_tests);
     test_step.dependOn(&run_evmc_tests.step);
+
+    // Dispatch table tests (comptime function pointer dispatch)
+    const dispatch_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/evm/dispatch.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    dispatch_test_mod.addImport("evm", evm_mod);
+    dispatch_test_mod.addImport("types", types_mod);
+
+    const dispatch_tests = b.addTest(.{
+        .root_module = dispatch_test_mod,
+    });
+    const run_dispatch_tests = b.addRunArtifact(dispatch_tests);
+    test_step.dependOn(&run_dispatch_tests.step);
 
     // zkVM I/O layer tests
     const zkvm_io_test_mod = b.createModule(.{
@@ -669,6 +782,22 @@ pub fn build(b: *std.Build) void {
     });
     const run_zkvm_guest_tests = b.addRunArtifact(zkvm_guest_tests);
     test_step.dependOn(&run_zkvm_guest_tests.step);
+
+    // RPC server tests
+    const rpc_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/rpc/server.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    rpc_test_mod.addImport("sim", sim_mod);
+    rpc_test_mod.addImport("types", types_mod);
+    rpc_test_mod.addImport("state", state_mod);
+
+    const rpc_tests = b.addTest(.{
+        .root_module = rpc_test_mod,
+    });
+    const run_rpc_tests = b.addRunArtifact(rpc_tests);
+    test_step.dependOn(&run_rpc_tests.step);
 
     // Reference test runner executable
     const reference_test_exe_mod = b.createModule(.{

@@ -346,19 +346,20 @@ test "EVM: SELFDESTRUCT to self with balance zeros balance" {
     const result = try vm.execute(&code, &[_]u8{});
     try testing.expect(result.success);
 
-    // Account should be destroyed: no longer exists in state
-    try testing.expect(!db.exists(addr_aa));
+    // EIP-6780: Account NOT created in same tx, so it is NOT destroyed.
+    // It still exists but with zero balance.
+    try testing.expect(db.exists(addr_aa));
 
-    // Balance should be zero (not doubled). destroyAccount removes the account,
-    // and since beneficiary == self with non-zero balance the transfer is skipped.
+    // Balance should be zero. Since beneficiary == self, no transfer occurs,
+    // but the balance is zeroed per EIP-6780 non-destruction path.
     const balance = db.getBalance(addr_aa) catch types.U256.zero();
     try testing.expect(balance.isZero());
 
     // Gas: 3 (PUSH1) + 5000 (selfdestruct base) + 100 (warm self access) = 5103
     try testing.expectEqual(@as(u64, 5103), result.gas_used);
 
-    // Refund: 4800 for first selfdestruct
-    try testing.expectEqual(@as(u64, 4800), result.gas_refund);
+    // Refund: 0 post-London (EIP-3529)
+    try testing.expectEqual(@as(u64, 0), result.gas_refund);
 }
 
 test "EVM: SELFDESTRUCT double-destruct same tx refunds only once" {
@@ -390,7 +391,7 @@ test "EVM: SELFDESTRUCT double-destruct same tx refunds only once" {
 
     const result1 = try vm1.execute(&code, &[_]u8{});
     try testing.expect(result1.success);
-    try testing.expectEqual(@as(u64, 4800), result1.gas_refund);
+    try testing.expectEqual(@as(u64, 0), result1.gas_refund);
 
     // Re-create account for second call (simulating within same tx context)
     try db.createAccount(addr_bb);
@@ -407,8 +408,8 @@ test "EVM: SELFDESTRUCT double-destruct same tx refunds only once" {
     const result2 = try vm2.execute(&code, &[_]u8{});
     try testing.expect(result2.success);
 
-    // Refund should still be 4800, not 9600 (second destruct does not add refund)
-    try testing.expectEqual(@as(u64, 4800), result2.gas_refund);
+    // Refund should still be 0 (EIP-3529: no SELFDESTRUCT refund) (second destruct does not add refund)
+    try testing.expectEqual(@as(u64, 0), result2.gas_refund);
 }
 
 // ============================================================================

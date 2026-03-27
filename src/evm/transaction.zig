@@ -9,6 +9,7 @@ pub const TransactionType = enum(u8) {
     legacy = 0,
     access_list = 1, // EIP-2930
     dynamic_fee = 2, // EIP-1559
+    blob = 3, // EIP-4844
 };
 
 /// Ethereum transaction (all types unified).
@@ -29,6 +30,10 @@ pub const Transaction = struct {
 
     // EIP-2930
     access_list: ?[]const AccessListEntry = null,
+
+    // EIP-4844 blob transaction fields
+    max_fee_per_blob_gas: ?u64 = null,
+    blob_versioned_hashes: ?[]const types.Hash = null,
 
     // Sender (recovered from signature in practice; explicit here)
     from: types.Address,
@@ -51,6 +56,7 @@ pub const BlockContext = struct {
     base_fee: u64,
     prev_randao: ?types.U256 = null,
     chain_id: u64 = 1,
+    blob_base_fee: ?u64 = null, // EIP-4844: blob base fee for the block
 };
 
 /// Result of executing a single transaction against state.
@@ -61,6 +67,7 @@ pub const TransactionResult = struct {
     return_data: []const u8,
     logs: []const evm.Log,
     created_address: ?types.Address,
+    blob_gas_used: u64 = 0, // EIP-4844: blob gas consumed (separate from execution gas)
 };
 
 /// Transaction validation/execution errors.
@@ -71,6 +78,11 @@ pub const TransactionError = error{
     MaxFeeUnderBaseFee,
     IntrinsicGasExceedsLimit,
     MissingGasPrice,
+    // EIP-4844 blob transaction errors
+    MissingBlobHashes,
+    MissingBlobFee,
+    BlobFeeTooLow,
+    BlobCreateNotAllowed,
 };
 
 // ---------------------------------------------------------------------------
@@ -83,6 +95,7 @@ const TX_DATA_ZERO_GAS: u64 = 4;
 const TX_DATA_NONZERO_GAS: u64 = 16;
 const TX_ACCESS_LIST_ADDRESS_GAS: u64 = 2_400;
 const TX_ACCESS_LIST_STORAGE_KEY_GAS: u64 = 1_900;
+const GAS_PER_BLOB: u64 = 131_072; // EIP-4844: 2^17
 
 pub fn intrinsicGas(tx: Transaction) u64 {
     var gas: u64 = if (tx.to == null) TX_GAS_CREATE else TX_GAS_BASE;
@@ -108,7 +121,7 @@ pub fn intrinsicGas(tx: Transaction) u64 {
 fn effectiveGasPrice(tx: Transaction, base_fee: u64) !u64 {
     return switch (tx.tx_type) {
         .legacy, .access_list => tx.gas_price orelse return TransactionError.MissingGasPrice,
-        .dynamic_fee => blk: {
+        .dynamic_fee, .blob => blk: {
             const max_fee = tx.max_fee_per_gas orelse return TransactionError.MissingGasPrice;
             const max_priority = tx.max_priority_fee_per_gas orelse 0;
             // effective_gas_price = min(max_fee, base_fee + max_priority)
@@ -147,6 +160,21 @@ pub fn executeTransaction(
     const sender_nonce = try state_db.getNonce(tx.from);
     if (sender_nonce != tx.nonce) return TransactionError.NonceMismatch;
 
+    // 1b. EIP-4844: validate blob transaction constraints
+    var blob_gas: u64 = 0;
+    if (tx.tx_type == .blob) {
+        // Must have blob hashes
+        const hashes = tx.blob_versioned_hashes orelse return TransactionError.MissingBlobHashes;
+        if (hashes.len == 0) return TransactionError.MissingBlobHashes;
+        // max_fee_per_blob_gas must cover the block's blob base fee
+        const max_blob_fee = tx.max_fee_per_blob_gas orelse return TransactionError.MissingBlobFee;
+        const effective_blob_base_fee = block.blob_base_fee orelse 1;
+        if (max_blob_fee < effective_blob_base_fee) return TransactionError.BlobFeeTooLow;
+        // Must be a contract call (not creation)
+        if (tx.to == null) return TransactionError.BlobCreateNotAllowed;
+        blob_gas = @as(u64, @intCast(hashes.len)) * GAS_PER_BLOB;
+    }
+
     // 2. Calculate intrinsic gas
     const intrinsic = intrinsicGas(tx);
     if (intrinsic > tx.gas_limit) return TransactionError.IntrinsicGasExceedsLimit;
@@ -155,29 +183,33 @@ pub fn executeTransaction(
     if (tx.gas_limit > block.gas_limit) return TransactionError.GasLimitExceedsBlock;
 
     // 4. Compute effective gas price
-    if (tx.tx_type == .dynamic_fee) {
+    if (tx.tx_type == .dynamic_fee or tx.tx_type == .blob) {
         const max_fee = tx.max_fee_per_gas orelse return TransactionError.MissingGasPrice;
         if (max_fee < block.base_fee) return TransactionError.MaxFeeUnderBaseFee;
     }
     const gas_price = try effectiveGasPrice(tx, block.base_fee);
 
-    // 5. Check sender balance >= value + gas_limit * gas_price
+    // 5. Check sender balance >= value + gas_limit * gas_price + blob_gas_cost
     const gas_cost = types.U256.fromU64(tx.gas_limit).mul(types.U256.fromU64(gas_price));
-    const total_cost = tx.value.add(gas_cost);
+    const blob_cost = if (blob_gas > 0)
+        types.U256.fromU64(blob_gas).mul(types.U256.fromU64(block.blob_base_fee orelse 1))
+    else
+        types.U256.zero();
+    const total_cost = tx.value.add(gas_cost).add(blob_cost);
     const sender_balance = try state_db.getBalance(tx.from);
     if (sender_balance.lt(total_cost)) return TransactionError.InsufficientBalance;
 
-    // 6. Compute coinbase gas price (priority fee for EIP-1559)
+    // 6. Compute coinbase gas price (priority fee for EIP-1559 / EIP-4844)
     const coinbase_gas_price: u64 = switch (tx.tx_type) {
         .legacy, .access_list => gas_price,
-        .dynamic_fee => blk: {
+        .dynamic_fee, .blob => blk: {
             const priority = tx.max_priority_fee_per_gas orelse 0;
             break :blk @min(priority, gas_price -| block.base_fee);
         },
     };
 
-    // 7. Deduct up-front gas payment from sender
-    try state_db.setBalance(tx.from, sender_balance.sub(gas_cost));
+    // 7. Deduct up-front gas payment + blob gas cost from sender
+    try state_db.setBalance(tx.from, sender_balance.sub(gas_cost).sub(blob_cost));
 
     // 8. Increment sender nonce
     try state_db.incrementNonce(tx.from);
@@ -243,6 +275,7 @@ pub fn executeTransaction(
                 .return_data = &[_]u8{},
                 .logs = &[_]evm.Log{},
                 .created_address = null,
+                .blob_gas_used = blob_gas,
             };
         }
 
@@ -262,11 +295,13 @@ pub fn executeTransaction(
         ctx.chain_id = block.chain_id;
         ctx.block_base_fee = block.base_fee;
         ctx.block_prev_randao = block.prev_randao;
+        ctx.blob_versioned_hashes = tx.blob_versioned_hashes;
+        ctx.block_blob_base_fee = block.blob_base_fee;
 
         var vm = try evm.EVM.initWithContext(allocator, gas_available, ctx);
         defer vm.deinit();
         vm.state_db = state_db;
-        warmAccessList(&vm, tx);
+        warmAccessList(&vm, tx, block);
 
         evm_result = vm.execute(code, tx.data) catch {
             // OOG or other hard error — all gas consumed
@@ -315,11 +350,13 @@ pub fn executeTransaction(
         ctx.chain_id = block.chain_id;
         ctx.block_base_fee = block.base_fee;
         ctx.block_prev_randao = block.prev_randao;
+        ctx.blob_versioned_hashes = tx.blob_versioned_hashes;
+        ctx.block_blob_base_fee = block.blob_base_fee;
 
         var vm = try evm.EVM.initWithContext(allocator, gas_available, ctx);
         defer vm.deinit();
         vm.state_db = state_db;
-        warmAccessList(&vm, tx);
+        warmAccessList(&vm, tx, block);
 
         evm_result = vm.execute(tx.data, &[_]u8{}) catch {
             try state_db.commitSnapshot(snap);
@@ -373,16 +410,20 @@ pub fn executeTransaction(
         .return_data = evm_result.return_data,
         .logs = evm_result.logs,
         .created_address = created_address,
+        .blob_gas_used = blob_gas,
     };
 }
 
-/// Pre-warm EIP-2930 access list entries in the EVM instance.
-fn warmAccessList(vm: *evm.EVM, tx: Transaction) void {
+/// Pre-warm EIP-2930 access list entries and EIP-3651 coinbase in the EVM instance.
+fn warmAccessList(vm: *evm.EVM, tx: Transaction, block_ctx: BlockContext) void {
     // Always warm the sender and recipient (or contract address).
     vm.warm_accounts.put(tx.from, {}) catch {};
     if (tx.to) |to_addr| {
         vm.warm_accounts.put(to_addr, {}) catch {};
     }
+
+    // EIP-3651 (Shanghai): Pre-warm the coinbase address.
+    vm.warm_accounts.put(block_ctx.coinbase, {}) catch {};
 
     if (tx.access_list) |al| {
         for (al) |entry| {
@@ -764,4 +805,304 @@ test "EIP-1559 max_fee below base_fee rejection" {
 
     const err = executeTransaction(allocator, tx, &db, block);
     try std.testing.expectError(TransactionError.MaxFeeUnderBaseFee, err);
+}
+
+// ===========================================================================
+// EIP-4844 Blob Transaction Tests
+// ===========================================================================
+
+fn testBlobHashes() [3]types.Hash {
+    var h0 = types.Hash.zero;
+    h0.bytes[0] = 0x01; // versioned hash v1
+    h0.bytes[1] = 0xAA;
+    var h1 = types.Hash.zero;
+    h1.bytes[0] = 0x01;
+    h1.bytes[1] = 0xBB;
+    var h2 = types.Hash.zero;
+    h2.bytes[0] = 0x01;
+    h2.bytes[1] = 0xCC;
+    return .{ h0, h1, h2 };
+}
+
+fn testBlobBlockContext() BlockContext {
+    return BlockContext{
+        .number = 19_000_000,
+        .timestamp = 1_710_000_000,
+        .coinbase = coinbaseAddr(),
+        .difficulty = types.U256.fromU64(0),
+        .gas_limit = 30_000_000,
+        .base_fee = 10,
+        .chain_id = 1,
+        .blob_base_fee = 20, // 20 wei per blob gas
+    };
+}
+
+test "EIP-4844 blob transaction executes successfully" {
+    const allocator = std.testing.allocator;
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    const sender = senderAddr();
+    const recipient = recipientAddr();
+    const coinbase = coinbaseAddr();
+
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.fromU64(1_000_000_000_000_000_000));
+    try db.createAccount(coinbase);
+
+    const block = testBlobBlockContext();
+    var hashes = testBlobHashes();
+
+    const tx = Transaction{
+        .tx_type = .blob,
+        .nonce = 0,
+        .gas_limit = 21_000,
+        .to = recipient,
+        .value = types.U256.fromU64(1_000),
+        .data = &[_]u8{},
+        .max_fee_per_gas = 30,
+        .max_priority_fee_per_gas = 5,
+        .max_fee_per_blob_gas = 100,
+        .blob_versioned_hashes = &hashes,
+        .from = sender,
+    };
+
+    const result = try executeTransaction(allocator, tx, &db, block);
+
+    try std.testing.expect(result.success);
+    try std.testing.expectEqual(@as(u64, 21_000), result.gas_used);
+    // 3 blobs * 131072 gas per blob
+    try std.testing.expectEqual(@as(u64, 3 * 131_072), result.blob_gas_used);
+
+    // Recipient got the value
+    const recipient_bal = try db.getBalance(recipient);
+    try std.testing.expectEqual(@as(u64, 1_000), recipient_bal.limbs[0]);
+}
+
+test "EIP-4844 blob tx without blob hashes rejected" {
+    const allocator = std.testing.allocator;
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    const sender = senderAddr();
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.fromU64(1_000_000_000_000_000_000));
+
+    const block = testBlobBlockContext();
+
+    // No blob_versioned_hashes field
+    const tx = Transaction{
+        .tx_type = .blob,
+        .nonce = 0,
+        .gas_limit = 21_000,
+        .to = recipientAddr(),
+        .value = types.U256.fromU64(0),
+        .data = &[_]u8{},
+        .max_fee_per_gas = 30,
+        .max_priority_fee_per_gas = 5,
+        .max_fee_per_blob_gas = 100,
+        .from = sender,
+    };
+
+    const err = executeTransaction(allocator, tx, &db, block);
+    try std.testing.expectError(TransactionError.MissingBlobHashes, err);
+}
+
+test "EIP-4844 blob tx with empty blob hashes rejected" {
+    const allocator = std.testing.allocator;
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    const sender = senderAddr();
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.fromU64(1_000_000_000_000_000_000));
+
+    const block = testBlobBlockContext();
+
+    const empty_hashes = [_]types.Hash{};
+    const tx = Transaction{
+        .tx_type = .blob,
+        .nonce = 0,
+        .gas_limit = 21_000,
+        .to = recipientAddr(),
+        .value = types.U256.fromU64(0),
+        .data = &[_]u8{},
+        .max_fee_per_gas = 30,
+        .max_priority_fee_per_gas = 5,
+        .max_fee_per_blob_gas = 100,
+        .blob_versioned_hashes = &empty_hashes,
+        .from = sender,
+    };
+
+    const err = executeTransaction(allocator, tx, &db, block);
+    try std.testing.expectError(TransactionError.MissingBlobHashes, err);
+}
+
+test "EIP-4844 blob tx with max_fee_per_blob_gas below base fee rejected" {
+    const allocator = std.testing.allocator;
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    const sender = senderAddr();
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.fromU64(1_000_000_000_000_000_000));
+
+    var block = testBlobBlockContext();
+    block.blob_base_fee = 50; // blob base fee is 50
+
+    var hashes = testBlobHashes();
+    const tx = Transaction{
+        .tx_type = .blob,
+        .nonce = 0,
+        .gas_limit = 21_000,
+        .to = recipientAddr(),
+        .value = types.U256.fromU64(0),
+        .data = &[_]u8{},
+        .max_fee_per_gas = 30,
+        .max_priority_fee_per_gas = 5,
+        .max_fee_per_blob_gas = 10, // below blob base fee of 50
+        .blob_versioned_hashes = &hashes,
+        .from = sender,
+    };
+
+    const err = executeTransaction(allocator, tx, &db, block);
+    try std.testing.expectError(TransactionError.BlobFeeTooLow, err);
+}
+
+test "EIP-4844 blob tx with to=null (creation) rejected" {
+    const allocator = std.testing.allocator;
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    const sender = senderAddr();
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.fromU64(1_000_000_000_000_000_000));
+
+    const block = testBlobBlockContext();
+
+    var hashes = testBlobHashes();
+    const tx = Transaction{
+        .tx_type = .blob,
+        .nonce = 0,
+        .gas_limit = 100_000,
+        .to = null, // contract creation — not allowed for blob tx
+        .value = types.U256.fromU64(0),
+        .data = &[_]u8{},
+        .max_fee_per_gas = 30,
+        .max_priority_fee_per_gas = 5,
+        .max_fee_per_blob_gas = 100,
+        .blob_versioned_hashes = &hashes,
+        .from = sender,
+    };
+
+    const err = executeTransaction(allocator, tx, &db, block);
+    try std.testing.expectError(TransactionError.BlobCreateNotAllowed, err);
+}
+
+test "EIP-4844 BLOBHASH opcode returns correct hash during blob tx execution" {
+    const allocator = std.testing.allocator;
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    const sender = senderAddr();
+    const contract = recipientAddr();
+    const coinbase = coinbaseAddr();
+
+    try db.createAccount(sender);
+    try db.setBalance(sender, types.U256.fromU64(1_000_000_000_000_000_000));
+    try db.createAccount(coinbase);
+    try db.createAccount(contract);
+
+    // Contract code: PUSH1 0x00 BLOBHASH PUSH1 0x00 MSTORE PUSH1 0x20 PUSH1 0x00 RETURN
+    // This pushes index 0, calls BLOBHASH, stores result in memory, and returns it.
+    const code = [_]u8{
+        0x60, 0x00, // PUSH1 0x00 (index)
+        0x49, // BLOBHASH
+        0x60, 0x00, // PUSH1 0x00 (memory offset)
+        0x52, // MSTORE
+        0x60, 0x20, // PUSH1 0x20 (size = 32)
+        0x60, 0x00, // PUSH1 0x00 (offset)
+        0xF3, // RETURN
+    };
+    try db.setCode(contract, &code);
+
+    const block = testBlobBlockContext();
+    var hashes = testBlobHashes();
+
+    const tx = Transaction{
+        .tx_type = .blob,
+        .nonce = 0,
+        .gas_limit = 100_000,
+        .to = contract,
+        .value = types.U256.fromU64(0),
+        .data = &[_]u8{},
+        .max_fee_per_gas = 30,
+        .max_priority_fee_per_gas = 5,
+        .max_fee_per_blob_gas = 100,
+        .blob_versioned_hashes = &hashes,
+        .from = sender,
+    };
+
+    const result = try executeTransaction(allocator, tx, &db, block);
+    defer if (result.return_data.len > 0) allocator.free(@constCast(result.return_data));
+    defer allocator.free(@constCast(result.logs));
+
+    try std.testing.expect(result.success);
+    try std.testing.expectEqual(@as(usize, 32), result.return_data.len);
+
+    // Verify returned hash matches the first blob versioned hash
+    var returned_hash: [32]u8 = undefined;
+    @memcpy(&returned_hash, result.return_data[0..32]);
+    try std.testing.expectEqualSlices(u8, &hashes[0].bytes, &returned_hash);
+}
+
+test "EIP-4844 blob gas charged separately from execution gas" {
+    const allocator = std.testing.allocator;
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    const sender = senderAddr();
+    const recipient = recipientAddr();
+    const coinbase = coinbaseAddr();
+
+    try db.createAccount(sender);
+    const initial_balance: u64 = 1_000_000_000_000_000_000;
+    try db.setBalance(sender, types.U256.fromU64(initial_balance));
+    try db.createAccount(coinbase);
+
+    const block = testBlobBlockContext(); // blob_base_fee = 20
+
+    var hashes = testBlobHashes(); // 3 hashes
+
+    const tx = Transaction{
+        .tx_type = .blob,
+        .nonce = 0,
+        .gas_limit = 21_000,
+        .to = recipient,
+        .value = types.U256.fromU64(0),
+        .data = &[_]u8{},
+        .max_fee_per_gas = 30,
+        .max_priority_fee_per_gas = 5,
+        .max_fee_per_blob_gas = 100,
+        .blob_versioned_hashes = &hashes,
+        .from = sender,
+    };
+
+    const result = try executeTransaction(allocator, tx, &db, block);
+    try std.testing.expect(result.success);
+
+    // Execution gas: 21000 (simple transfer)
+    try std.testing.expectEqual(@as(u64, 21_000), result.gas_used);
+    // Blob gas: 3 * 131072 = 393216
+    const expected_blob_gas: u64 = 3 * 131_072;
+    try std.testing.expectEqual(expected_blob_gas, result.blob_gas_used);
+
+    // Verify sender balance deductions:
+    // effective_gas_price = min(30, 10 + 5) = 15
+    // execution cost = 21000 * 15 = 315000
+    // blob cost = 393216 * 20 = 7864320
+    // total deducted = 315000 + 7864320 = 8179320
+    const sender_bal = try db.getBalance(sender);
+    const expected_sender = initial_balance - (21_000 * 15) - (expected_blob_gas * 20);
+    try std.testing.expectEqual(expected_sender, sender_bal.limbs[0]);
 }

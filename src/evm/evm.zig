@@ -3,6 +3,10 @@ const types = @import("types");
 const crypto = @import("crypto");
 const state = @import("state");
 const bn254_pairing = @import("bn254_pairing.zig");
+pub const tracer_mod = @import("tracer.zig");
+pub const Tracer = tracer_mod.Tracer;
+pub const TraceStep = tracer_mod.TraceStep;
+pub const GasProfile = tracer_mod.GasProfile;
 
 /// Execution context for EVM
 pub const ExecutionContext = struct {
@@ -79,6 +83,8 @@ pub const EVM = struct {
     warm_accounts: std.AutoHashMap(types.Address, void),
     // Track SELFDESTRUCTed accounts for one-time refund accounting.
     selfdestructed_accounts: std.AutoHashMap(types.Address, void),
+    // EIP-6780: Track accounts created in the current transaction for SELFDESTRUCT semantics.
+    created_in_tx: std.AutoHashMap(types.Address, void),
     // Optional block hash history for BLOCKHASH opcode.
     block_hashes: std.AutoHashMap(u64, types.Hash),
     // Return data from last CALL/CREATE/DELEGATECALL (for RETURNDATACOPY)
@@ -90,6 +96,7 @@ pub const EVM = struct {
     transient_storage: std.AutoHashMap(TransientKey, types.U256),
     // State database for external account lookups (optional)
     state_db: ?*state.StateDB = null,
+    tracer: ?*Tracer = null,
 
     pub fn init(allocator: std.mem.Allocator, gas_limit: u64) !EVM {
         return EVM{
@@ -106,6 +113,7 @@ pub const EVM = struct {
             .original_storage = std.AutoHashMap(types.U256, types.U256).init(allocator),
             .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .selfdestructed_accounts = std.AutoHashMap(types.Address, void).init(allocator),
+            .created_in_tx = std.AutoHashMap(types.Address, void).init(allocator),
             .block_hashes = std.AutoHashMap(u64, types.Hash).init(allocator),
             .transient_storage = std.AutoHashMap(TransientKey, types.U256).init(allocator),
             .state_db = null,
@@ -127,6 +135,7 @@ pub const EVM = struct {
             .original_storage = std.AutoHashMap(types.U256, types.U256).init(allocator),
             .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .selfdestructed_accounts = std.AutoHashMap(types.Address, void).init(allocator),
+            .created_in_tx = std.AutoHashMap(types.Address, void).init(allocator),
             .block_hashes = std.AutoHashMap(u64, types.Hash).init(allocator),
             .transient_storage = std.AutoHashMap(TransientKey, types.U256).init(allocator),
             .state_db = null,
@@ -148,6 +157,7 @@ pub const EVM = struct {
             .original_storage = std.AutoHashMap(types.U256, types.U256).init(allocator),
             .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .selfdestructed_accounts = std.AutoHashMap(types.Address, void).init(allocator),
+            .created_in_tx = std.AutoHashMap(types.Address, void).init(allocator),
             .block_hashes = std.AutoHashMap(u64, types.Hash).init(allocator),
             .transient_storage = std.AutoHashMap(TransientKey, types.U256).init(allocator),
             .state_db = state_db,
@@ -184,6 +194,12 @@ pub const EVM = struct {
             try self.selfdestructed_accounts.put(entry.key_ptr.*, {});
         }
 
+        // EIP-6780: Copy created_in_tx tracking to child (tx-scoped)
+        var created_it = other.created_in_tx.iterator();
+        while (created_it.next()) |entry| {
+            try self.created_in_tx.put(entry.key_ptr.*, {});
+        }
+
         // EIP-1153: Copy transient storage to child (tx-scoped, shared across call frames)
         var transient_it = other.transient_storage.iterator();
         while (transient_it.next()) |entry| {
@@ -216,6 +232,12 @@ pub const EVM = struct {
             }
         }
 
+        // EIP-6780: Merge created_in_tx tracking from child (always, tx-scoped)
+        var created_it = child.created_in_tx.iterator();
+        while (created_it.next()) |entry| {
+            try self.created_in_tx.put(entry.key_ptr.*, {});
+        }
+
         // EIP-1153: Always merge transient storage back (survives REVERT, tx-scoped)
         var transient_it = child.transient_storage.iterator();
         while (transient_it.next()) |entry| {
@@ -233,6 +255,7 @@ pub const EVM = struct {
         self.original_storage.deinit();
         self.warm_accounts.deinit();
         self.selfdestructed_accounts.deinit();
+        self.created_in_tx.deinit();
         self.block_hashes.deinit();
         self.transient_storage.deinit();
     }
@@ -350,7 +373,7 @@ pub const EVM = struct {
         return 2600; // cold account access cost
     }
 
-    fn clearReturnData(self: *EVM) void {
+    pub fn clearReturnData(self: *EVM) void {
         if (self.return_data_owned) |buf| {
             self.allocator.free(buf);
             self.return_data_owned = null;
@@ -1276,6 +1299,21 @@ pub const EVM = struct {
             const opcode = @as(Opcode, @enumFromInt(code[pc]));
             pc += 1;
 
+            // Tracer: capture pre-execution snapshot (null check = zero overhead when disabled)
+            if (self.tracer) |t| {
+                try t.captureStep(.{
+                    .pc = pc - 1,
+                    .op = code[pc - 1],
+                    .op_name = tracer_mod.opcodeNameFromByte(code[pc - 1]),
+                    .gas = if (self.gas_limit > self.gas_used) self.gas_limit - self.gas_used else 0,
+                    .gas_cost = 0,
+                    .depth = 1,
+                    .stack = self.stack.items.items[0..self.stack.items.items.len],
+                    .memory_size = self.memory.data.items.len,
+                });
+            }
+            const gas_before_op = self.gas_used;
+
             self.executeOpcode(opcode, code, &pc) catch |err| {
                 if (err == error.Revert) {
                     return ExecutionResult{
@@ -1288,6 +1326,11 @@ pub const EVM = struct {
                 }
                 return err;
             };
+
+            // Tracer: back-patch gas cost after successful dispatch
+            if (self.tracer) |t| {
+                t.patchGasCost(self.gas_used - gas_before_op);
+            }
         }
 
         if (self.state_db) |db| {
@@ -1495,42 +1538,42 @@ pub const EVM = struct {
         }
     }
 
-    fn opAdd(self: *EVM) !void {
+    pub fn opAdd(self: *EVM) !void {
         const a = try self.stack.pop();
         const b = try self.stack.pop();
         try self.stack.push(self.allocator, a.add(b));
         self.gas_used += 3;
     }
 
-    fn opMul(self: *EVM) !void {
+    pub fn opMul(self: *EVM) !void {
         const a = try self.stack.pop();
         const b = try self.stack.pop();
         try self.stack.push(self.allocator, a.mul(b));
         self.gas_used += 5;
     }
 
-    fn opSub(self: *EVM) !void {
+    pub fn opSub(self: *EVM) !void {
         const a = try self.stack.pop(); // top of stack
         const b = try self.stack.pop(); // second
         try self.stack.push(self.allocator, b.sub(a)); // b - a (reversed!)
         self.gas_used += 3;
     }
 
-    fn opDiv(self: *EVM) !void {
+    pub fn opDiv(self: *EVM) !void {
         const a = try self.stack.pop(); // top
         const b = try self.stack.pop(); // second
         try self.stack.push(self.allocator, b.div(a)); // b / a (reversed!)
         self.gas_used += 5;
     }
 
-    fn opMod(self: *EVM) !void {
+    pub fn opMod(self: *EVM) !void {
         const a = try self.stack.pop(); // top
         const b = try self.stack.pop(); // second
         try self.stack.push(self.allocator, b.mod(a)); // b % a (reversed!)
         self.gas_used += 5;
     }
 
-    fn opAddmod(self: *EVM) !void {
+    pub fn opAddmod(self: *EVM) !void {
         // ADDMOD: (a + b) % m
         // Stack: a, b, m -> result
         const m = try self.stack.pop();
@@ -1552,7 +1595,7 @@ pub const EVM = struct {
         self.gas_used += 8;
     }
 
-    fn opMulmod(self: *EVM) !void {
+    pub fn opMulmod(self: *EVM) !void {
         // MULMOD: (a * b) % m
         // Stack: a, b, m -> result
         const m = try self.stack.pop();
@@ -1574,7 +1617,7 @@ pub const EVM = struct {
         self.gas_used += 8;
     }
 
-    fn opSdiv(self: *EVM) !void {
+    pub fn opSdiv(self: *EVM) !void {
         // Signed division: result = sign(b/a) * abs(b/a)
         // EVM uses two's complement representation
         const a = try self.stack.pop();
@@ -1611,7 +1654,7 @@ pub const EVM = struct {
         self.gas_used += 5;
     }
 
-    fn opSmod(self: *EVM) !void {
+    pub fn opSmod(self: *EVM) !void {
         // Signed modulo: result = sign(b) * abs(b) % abs(a)
         // EVM uses two's complement representation
         const a = try self.stack.pop();
@@ -1644,7 +1687,7 @@ pub const EVM = struct {
         self.gas_used += 5;
     }
 
-    fn opSignExtend(self: *EVM) !void {
+    pub fn opSignExtend(self: *EVM) !void {
         // SIGNEXTEND(i, x): Extend sign of (i*8+7)th bit of x to all higher bits
         const bit_pos_u256 = try self.stack.pop();
         const value = try self.stack.pop();
@@ -1698,7 +1741,7 @@ pub const EVM = struct {
         self.gas_used += 5;
     }
 
-    fn opExp(self: *EVM) !void {
+    pub fn opExp(self: *EVM) !void {
         const exponent = try self.stack.pop();
         const base = try self.stack.pop();
 
@@ -1731,7 +1774,7 @@ pub const EVM = struct {
     }
 
     // Comparison opcodes
-    fn opLt(self: *EVM) !void {
+    pub fn opLt(self: *EVM) !void {
         const a = try self.stack.pop(); // top
         const b = try self.stack.pop(); // second
         const result = if (b.lt(a)) types.U256.one() else types.U256.zero(); // b < a
@@ -1739,7 +1782,7 @@ pub const EVM = struct {
         self.gas_used += 3;
     }
 
-    fn opGt(self: *EVM) !void {
+    pub fn opGt(self: *EVM) !void {
         const a = try self.stack.pop(); // top
         const b = try self.stack.pop(); // second
         const result = if (b.gt(a)) types.U256.one() else types.U256.zero(); // b > a
@@ -1747,7 +1790,7 @@ pub const EVM = struct {
         self.gas_used += 3;
     }
 
-    fn opEq(self: *EVM) !void {
+    pub fn opEq(self: *EVM) !void {
         const a = try self.stack.pop();
         const b = try self.stack.pop();
         const result = if (a.eq(b)) types.U256.one() else types.U256.zero();
@@ -1755,7 +1798,7 @@ pub const EVM = struct {
         self.gas_used += 3;
     }
 
-    fn opSlt(self: *EVM) !void {
+    pub fn opSlt(self: *EVM) !void {
         // SLT: signed(b) < signed(a)  where a = pop (top), b = pop (second)
         // Convention: result = second OP top (same as SUB, DIV, etc.)
         const a = try self.stack.pop();
@@ -1777,7 +1820,7 @@ pub const EVM = struct {
         self.gas_used += 3;
     }
 
-    fn opSgt(self: *EVM) !void {
+    pub fn opSgt(self: *EVM) !void {
         // SGT: signed(b) > signed(a)  where a = pop (top), b = pop (second)
         const a = try self.stack.pop();
         const b = try self.stack.pop();
@@ -1798,7 +1841,7 @@ pub const EVM = struct {
         self.gas_used += 3;
     }
 
-    fn opIsZero(self: *EVM) !void {
+    pub fn opIsZero(self: *EVM) !void {
         const a = try self.stack.pop();
         const result = if (a.isZero()) types.U256.one() else types.U256.zero();
         try self.stack.push(self.allocator, result);
@@ -1806,7 +1849,7 @@ pub const EVM = struct {
     }
 
     // Bitwise opcodes
-    fn opAnd(self: *EVM) !void {
+    pub fn opAnd(self: *EVM) !void {
         const a = try self.stack.pop();
         const b = try self.stack.pop();
         var result = types.U256.zero();
@@ -1817,7 +1860,7 @@ pub const EVM = struct {
         self.gas_used += 3;
     }
 
-    fn opOr(self: *EVM) !void {
+    pub fn opOr(self: *EVM) !void {
         const a = try self.stack.pop();
         const b = try self.stack.pop();
         var result = types.U256.zero();
@@ -1828,7 +1871,7 @@ pub const EVM = struct {
         self.gas_used += 3;
     }
 
-    fn opXor(self: *EVM) !void {
+    pub fn opXor(self: *EVM) !void {
         const a = try self.stack.pop();
         const b = try self.stack.pop();
         var result = types.U256.zero();
@@ -1839,7 +1882,7 @@ pub const EVM = struct {
         self.gas_used += 3;
     }
 
-    fn opNot(self: *EVM) !void {
+    pub fn opNot(self: *EVM) !void {
         const a = try self.stack.pop();
         var result = types.U256.zero();
         for (0..4) |i| {
@@ -1849,7 +1892,7 @@ pub const EVM = struct {
         self.gas_used += 3;
     }
 
-    fn opByte(self: *EVM) !void {
+    pub fn opByte(self: *EVM) !void {
         // BYTE(i, x): ith byte of x, where i=0 is MSB and i=31 is LSB
         const i_u256 = try self.stack.pop();
         const x = try self.stack.pop();
@@ -1874,7 +1917,7 @@ pub const EVM = struct {
         self.gas_used += 3;
     }
 
-    fn opShl(self: *EVM) !void {
+    pub fn opShl(self: *EVM) !void {
         const shift_u256 = try self.stack.pop();
         const value = try self.stack.pop();
         // If any upper limb is non-zero, shift >= 2^64 which is >= 256, so result is 0.
@@ -1886,7 +1929,7 @@ pub const EVM = struct {
         self.gas_used += 3;
     }
 
-    fn opShr(self: *EVM) !void {
+    pub fn opShr(self: *EVM) !void {
         const shift_u256 = try self.stack.pop();
         const value = try self.stack.pop();
         const result = if (shift_u256.limbs[1] != 0 or shift_u256.limbs[2] != 0 or shift_u256.limbs[3] != 0)
@@ -1897,7 +1940,7 @@ pub const EVM = struct {
         self.gas_used += 3;
     }
 
-    fn opSar(self: *EVM) !void {
+    pub fn opSar(self: *EVM) !void {
         // SAR (Signed Arithmetic Right Shift): preserves sign bit
         const shift_u256 = try self.stack.pop();
         const value = try self.stack.pop();
@@ -1914,7 +1957,7 @@ pub const EVM = struct {
     }
 
     // Duplication opcodes
-    fn opDup(self: *EVM, n: usize) !void {
+    pub fn opDup(self: *EVM, n: usize) !void {
         if (self.stack.items.items.len < n) {
             return error.StackUnderflow;
         }
@@ -1925,7 +1968,7 @@ pub const EVM = struct {
     }
 
     // Swap opcodes
-    fn opSwap(self: *EVM, n: usize) !void {
+    pub fn opSwap(self: *EVM, n: usize) !void {
         if (self.stack.items.items.len < n + 1) {
             return error.StackUnderflow;
         }
@@ -1937,14 +1980,14 @@ pub const EVM = struct {
     }
 
     // Additional memory/flow opcodes
-    fn opMsize(self: *EVM) !void {
+    pub fn opMsize(self: *EVM) !void {
         const size = types.U256.fromU64(self.memory.data.items.len);
         try self.stack.push(self.allocator, size);
         self.gas_used += 2;
     }
 
     /// EIP-5656: MCOPY -- memory-to-memory copy with overlap support.
-    fn opMcopy(self: *EVM) !void {
+    pub fn opMcopy(self: *EVM) !void {
         const dst_offset = (try self.stack.pop()).limbs[0];
         const src_offset = (try self.stack.pop()).limbs[0];
         const length = (try self.stack.pop()).limbs[0];
@@ -1978,12 +2021,12 @@ pub const EVM = struct {
     }
 
     /// EIP-3855: PUSH0 -- push the constant 0 onto the stack.
-    fn opPush0(self: *EVM) !void {
+    pub fn opPush0(self: *EVM) !void {
         try self.stack.push(self.allocator, types.U256.zero());
         self.gas_used += 2;
     }
 
-    fn opPc(self: *EVM, pc: *usize) !void {
+    pub fn opPc(self: *EVM, pc: *usize) !void {
         // PC returns the position of the current instruction
         // Since pc is incremented before executeOpcode, we subtract 1
         const value = types.U256.fromU64(pc.* - 1);
@@ -1991,34 +2034,34 @@ pub const EVM = struct {
         self.gas_used += 2;
     }
 
-    fn opGas(self: *EVM) !void {
+    pub fn opGas(self: *EVM) !void {
         const remaining = types.U256.fromU64(self.gas_limit - self.gas_used);
         try self.stack.push(self.allocator, remaining);
         self.gas_used += 2;
     }
 
     // Environmental opcodes
-    fn opAddress(self: *EVM) !void {
+    pub fn opAddress(self: *EVM) !void {
         try self.stack.push(self.allocator, addressToU256(self.context.address));
         self.gas_used += 2;
     }
 
-    fn opCaller(self: *EVM) !void {
+    pub fn opCaller(self: *EVM) !void {
         try self.stack.push(self.allocator, addressToU256(self.context.caller));
         self.gas_used += 2;
     }
 
-    fn opOrigin(self: *EVM) !void {
+    pub fn opOrigin(self: *EVM) !void {
         try self.stack.push(self.allocator, addressToU256(self.context.origin));
         self.gas_used += 2;
     }
 
-    fn opCallValue(self: *EVM) !void {
+    pub fn opCallValue(self: *EVM) !void {
         try self.stack.push(self.allocator, self.context.value);
         self.gas_used += 2;
     }
 
-    fn opCallDataLoad(self: *EVM) !void {
+    pub fn opCallDataLoad(self: *EVM) !void {
         const offset_u256 = try self.stack.pop();
         const offset = offset_u256.limbs[0];
 
@@ -2035,13 +2078,13 @@ pub const EVM = struct {
         self.gas_used += 3;
     }
 
-    fn opCallDataSize(self: *EVM) !void {
+    pub fn opCallDataSize(self: *EVM) !void {
         const size = types.U256.fromU64(self.context.calldata.len);
         try self.stack.push(self.allocator, size);
         self.gas_used += 2;
     }
 
-    fn opCallDataCopy(self: *EVM) !void {
+    pub fn opCallDataCopy(self: *EVM) !void {
         // Stack: memOffset, calldataOffset, length
         const mem_offset_u256 = try self.stack.pop();
         const calldata_offset_u256 = try self.stack.pop();
@@ -2089,13 +2132,13 @@ pub const EVM = struct {
         self.gas_used += 3 + mem_cost + copy_cost;
     }
 
-    fn opCodeSize(self: *EVM) !void {
+    pub fn opCodeSize(self: *EVM) !void {
         const size = types.U256.fromU64(self.context.code.len);
         try self.stack.push(self.allocator, size);
         self.gas_used += 2;
     }
 
-    fn opCodeCopy(self: *EVM) !void {
+    pub fn opCodeCopy(self: *EVM) !void {
         // Stack: memOffset, codeOffset, length
         const mem_offset_u256 = try self.stack.pop();
         const code_offset_u256 = try self.stack.pop();
@@ -2143,14 +2186,14 @@ pub const EVM = struct {
         self.gas_used += 3 + mem_cost + copy_cost;
     }
 
-    fn opGasPrice(self: *EVM) !void {
+    pub fn opGasPrice(self: *EVM) !void {
         // Fixed gas price for now
         const price = types.U256.fromU64(20000000000); // 20 gwei
         try self.stack.push(self.allocator, price);
         self.gas_used += 2;
     }
 
-    fn opBalance(self: *EVM) !void {
+    pub fn opBalance(self: *EVM) !void {
         // BALANCE(address): Get balance of account at address
         const address_u256 = try self.stack.pop();
         const address = u256ToAddress(address_u256);
@@ -2167,7 +2210,7 @@ pub const EVM = struct {
         self.gas_used += try self.accountAccessCost(address);
     }
 
-    fn opExtCodeSize(self: *EVM) !void {
+    pub fn opExtCodeSize(self: *EVM) !void {
         // EXTCODESIZE(address): Get size of code at address
         const address_u256 = try self.stack.pop();
         const address = u256ToAddress(address_u256);
@@ -2184,7 +2227,7 @@ pub const EVM = struct {
         self.gas_used += try self.accountAccessCost(address);
     }
 
-    fn opExtCodeCopy(self: *EVM) !void {
+    pub fn opExtCodeCopy(self: *EVM) !void {
         // EXTCODECOPY(address, memOffset, codeOffset, length): Copy code from external account to memory
         const address_u256 = try self.stack.pop();
         const mem_offset_u256 = try self.stack.pop();
@@ -2234,7 +2277,7 @@ pub const EVM = struct {
         self.gas_used += 20 + mem_cost + copy_cost + try self.accountAccessCost(address);
     }
 
-    fn opExtCodeHash(self: *EVM) !void {
+    pub fn opExtCodeHash(self: *EVM) !void {
         // EXTCODEHASH(address): Get hash of code at address (EIP-1052)
         const address_u256 = try self.stack.pop();
         const address = u256ToAddress(address_u256);
@@ -2257,7 +2300,7 @@ pub const EVM = struct {
     }
 
     // Block information opcodes
-    fn opCoinbase(self: *EVM) !void {
+    pub fn opCoinbase(self: *EVM) !void {
         var value = types.U256.zero();
         for (self.context.block_coinbase.bytes, 0..) |byte, i| {
             if (i < 20) value.limbs[0] |= @as(u64, byte) << @intCast((19 - i) * 8);
@@ -2266,37 +2309,37 @@ pub const EVM = struct {
         self.gas_used += 2;
     }
 
-    fn opTimestamp(self: *EVM) !void {
+    pub fn opTimestamp(self: *EVM) !void {
         const timestamp = types.U256.fromU64(self.context.block_timestamp);
         try self.stack.push(self.allocator, timestamp);
         self.gas_used += 2;
     }
 
-    fn opNumber(self: *EVM) !void {
+    pub fn opNumber(self: *EVM) !void {
         const number = types.U256.fromU64(self.context.block_number);
         try self.stack.push(self.allocator, number);
         self.gas_used += 2;
     }
 
-    fn opDifficulty(self: *EVM) !void {
+    pub fn opDifficulty(self: *EVM) !void {
         // Post-Merge: opcode 0x44 returns PREVRANDAO when present.
         try self.stack.push(self.allocator, self.context.block_prev_randao orelse self.context.block_difficulty);
         self.gas_used += 2;
     }
 
-    fn opGasLimit(self: *EVM) !void {
+    pub fn opGasLimit(self: *EVM) !void {
         const gaslimit = types.U256.fromU64(self.context.block_gaslimit);
         try self.stack.push(self.allocator, gaslimit);
         self.gas_used += 2;
     }
 
-    fn opChainId(self: *EVM) !void {
+    pub fn opChainId(self: *EVM) !void {
         const chain_id = types.U256.fromU64(self.context.chain_id);
         try self.stack.push(self.allocator, chain_id);
         self.gas_used += 2;
     }
 
-    fn opBlockhash(self: *EVM) !void {
+    pub fn opBlockhash(self: *EVM) !void {
         // BLOCKHASH: Hash of a given block
         // Stack: blockNumber -> hash
         const block_number_u256 = try self.stack.pop();
@@ -2332,7 +2375,7 @@ pub const EVM = struct {
         self.gas_used += 20;
     }
 
-    fn opSelfBalance(self: *EVM) !void {
+    pub fn opSelfBalance(self: *EVM) !void {
         // SELFBALANCE: Balance of the current account (EIP-1884)
         // Equivalent to BALANCE(ADDRESS) but cheaper (5 gas vs 100/2100)
         // Look up balance from state if available
@@ -2346,14 +2389,14 @@ pub const EVM = struct {
         self.gas_used += 5;
     }
 
-    fn opBaseFee(self: *EVM) !void {
+    pub fn opBaseFee(self: *EVM) !void {
         // EIP-1559 base fee - simplified for now
         const base_fee = types.U256.fromU64(1000000000); // 1 gwei
         try self.stack.push(self.allocator, base_fee);
         self.gas_used += 2;
     }
 
-    fn opBlobHash(self: *EVM) !void {
+    pub fn opBlobHash(self: *EVM) !void {
         // EIP-4844: BLOBHASH - returns versioned hash at index from tx blob list
         const index = try self.stack.pop();
         // If any upper limb is nonzero, index exceeds possible slice length
@@ -2372,7 +2415,7 @@ pub const EVM = struct {
         self.gas_used += 3;
     }
 
-    fn opBlobBaseFee(self: *EVM) !void {
+    pub fn opBlobBaseFee(self: *EVM) !void {
         // EIP-7516: BLOBBASEFEE - pushes current block blob base fee
         const fee = if (self.context.block_blob_base_fee) |f| types.U256.fromU64(f) else types.U256.zero();
         try self.stack.push(self.allocator, fee);
@@ -2380,7 +2423,7 @@ pub const EVM = struct {
     }
 
     // SHA3 opcode
-    fn opSha3(self: *EVM) !void {
+    pub fn opSha3(self: *EVM) !void {
         const offset = try self.stack.pop();
         const length = try self.stack.pop();
 
@@ -2407,7 +2450,7 @@ pub const EVM = struct {
     }
 
     // LOG opcodes
-    fn opLog(self: *EVM, topic_count: usize) !void {
+    pub fn opLog(self: *EVM, topic_count: usize) !void {
         if (self.is_static) return error.StaticStateChange;
         const offset = try self.stack.pop();
         const length = try self.stack.pop();
@@ -2444,7 +2487,7 @@ pub const EVM = struct {
     }
 
     // REVERT opcode
-    fn opRevert(self: *EVM) !void {
+    pub fn opRevert(self: *EVM) !void {
         const offset_u256 = try self.stack.pop();
         const length_u256 = try self.stack.pop();
         const offset = offset_u256.limbs[0];
@@ -2610,7 +2653,7 @@ pub const EVM = struct {
         return call_success;
     }
 
-    fn opCall(self: *EVM) !void {
+    pub fn opCall(self: *EVM) !void {
         const gas = try self.stack.pop();
         const address_u256 = try self.stack.pop();
         const value = try self.stack.pop();
@@ -2647,7 +2690,7 @@ pub const EVM = struct {
         );
     }
 
-    fn opStaticCall(self: *EVM) !void {
+    pub fn opStaticCall(self: *EVM) !void {
         const gas = try self.stack.pop();
         const address_u256 = try self.stack.pop();
         const args_offset = try self.stack.pop();
@@ -2674,7 +2717,7 @@ pub const EVM = struct {
         );
     }
 
-    fn opCallCode(self: *EVM) !void {
+    pub fn opCallCode(self: *EVM) !void {
         const gas = try self.stack.pop();
         const address_u256 = try self.stack.pop();
         const value = try self.stack.pop();
@@ -2706,7 +2749,7 @@ pub const EVM = struct {
         );
     }
 
-    fn opDelegateCall(self: *EVM) !void {
+    pub fn opDelegateCall(self: *EVM) !void {
         const gas = try self.stack.pop();
         const address_u256 = try self.stack.pop();
         const args_offset = try self.stack.pop();
@@ -2734,7 +2777,7 @@ pub const EVM = struct {
     }
 
     // CREATE opcodes
-    fn opCreate(self: *EVM) anyerror!void {
+    pub fn opCreate(self: *EVM) anyerror!void {
         if (self.is_static) return error.StaticStateChange;
         const value = try self.stack.pop();
         const offset = try self.stack.pop();
@@ -2773,6 +2816,12 @@ pub const EVM = struct {
         defer if (!create_committed) db.revertToSnapshot(create_snapshot) catch {};
 
         const creator_nonce = db.getNonce(self.context.address) catch 0;
+        // EIP-2681: Nonce limit (2^64 - 1)
+        if (creator_nonce >= std.math.maxInt(u64)) {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += create_gas;
+            return;
+        }
         const new_address = deriveCreateAddress(self.context.address, creator_nonce);
         const existing_nonce = db.getNonce(new_address) catch 0;
         if (existing_nonce != 0 or db.getCode(new_address).len != 0) {
@@ -2838,7 +2887,7 @@ pub const EVM = struct {
         create_committed = true;
     }
 
-    fn opCreate2(self: *EVM) anyerror!void {
+    pub fn opCreate2(self: *EVM) anyerror!void {
         if (self.is_static) return error.StaticStateChange;
         const value = try self.stack.pop();
         const offset = try self.stack.pop();
@@ -2878,6 +2927,13 @@ pub const EVM = struct {
         var create2_committed = false;
         defer if (!create2_committed) db.revertToSnapshot(create2_snapshot) catch {};
 
+        // EIP-2681: Nonce limit (2^64 - 1)
+        const creator_nonce_c2 = db.getNonce(self.context.address) catch 0;
+        if (creator_nonce_c2 >= std.math.maxInt(u64)) {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += create2_gas;
+            return;
+        }
         const new_address = deriveCreate2Address(self.context.address, salt, init_code);
         const existing_nonce = db.getNonce(new_address) catch 0;
         if (existing_nonce != 0 or db.getCode(new_address).len != 0) {
@@ -2935,6 +2991,8 @@ pub const EVM = struct {
         try self.setReturnData(child_result.return_data);
         try self.stack.push(self.allocator, addressToU256(new_address));
         try self.mergeChildTransactionTracking(&child, true);
+        // EIP-6780: Track that this address was created in the current transaction.
+        try self.created_in_tx.put(new_address, {});
         self.gas_refund = child_result.gas_refund;
         self.gas_used += create2_gas + @min(child_result.gas_used, child_gas_limit);
         try db.commitSnapshot(create2_snapshot);
@@ -2942,7 +3000,7 @@ pub const EVM = struct {
     }
 
     // SELFDESTRUCT opcode
-    fn opSelfDestruct(self: *EVM) !void {
+    pub fn opSelfDestruct(self: *EVM) !void {
         if (self.is_static) return error.StaticStateChange;
         const beneficiary = try self.stack.pop();
         const beneficiary_address = u256ToAddress(beneficiary);
@@ -2959,6 +3017,7 @@ pub const EVM = struct {
             self.gas_used += selfdestruct_gas;
             if (self.gas_used >= self.gas_limit) return error.OutOfGas;
 
+            // Transfer balance to beneficiary (always, regardless of EIP-6780).
             if (!balance.isZero() and !from.eql(beneficiary_address)) {
                 if (!db.exists(beneficiary_address)) {
                     try db.createAccount(beneficiary_address);
@@ -2967,12 +3026,18 @@ pub const EVM = struct {
                 try db.setBalance(beneficiary_address, beneficiary_balance.add(balance));
             }
 
-            try db.destroyAccount(from);
+            // EIP-6780 (Cancun): Only destroy the account if it was created
+            // in the same transaction. Otherwise just transfer the balance.
+            if (self.created_in_tx.contains(from)) {
+                try db.destroyAccount(from);
+            } else {
+                // Zero out the balance (already transferred above or self-destruct to self).
+                try db.setBalance(from, types.U256.zero());
+            }
 
             if (!self.selfdestructed_accounts.contains(from)) {
                 try self.selfdestructed_accounts.put(from, {});
-                // EIP-3529: SELFDESTRUCT refund reduced to 4800.
-                self.gas_refund += 4800;
+                // EIP-3529 (post-London): SELFDESTRUCT no longer generates refund.
             }
         } else {
             self.gas_used += selfdestruct_gas;
@@ -2981,7 +3046,7 @@ pub const EVM = struct {
         self.halted = true;
     }
 
-    fn opPush(self: *EVM, code: []const u8, pc: *usize, n: usize) !void {
+    pub fn opPush(self: *EVM, code: []const u8, pc: *usize, n: usize) !void {
         var value = types.U256.zero();
         const end = @min(pc.* + n, code.len);
 
@@ -2995,12 +3060,12 @@ pub const EVM = struct {
         self.gas_used += 3;
     }
 
-    fn opPop(self: *EVM) !void {
+    pub fn opPop(self: *EVM) !void {
         _ = try self.stack.pop();
         self.gas_used += 2;
     }
 
-    fn opMload(self: *EVM) !void {
+    pub fn opMload(self: *EVM) !void {
         const offset = try self.stack.pop();
         const off = offset.limbs[0];
         const new_size = off + 32;
@@ -3018,7 +3083,7 @@ pub const EVM = struct {
         self.gas_used += 3 + mem_cost;
     }
 
-    fn opMstore(self: *EVM) !void {
+    pub fn opMstore(self: *EVM) !void {
         const offset = try self.stack.pop();
         const value = try self.stack.pop();
         const off = offset.limbs[0];
@@ -3036,7 +3101,7 @@ pub const EVM = struct {
         self.gas_used += 3 + mem_cost;
     }
 
-    fn opMstore8(self: *EVM) !void {
+    pub fn opMstore8(self: *EVM) !void {
         // MSTORE8: Store single byte at memory offset
         const offset_u256 = try self.stack.pop();
         const value_u256 = try self.stack.pop();
@@ -3058,7 +3123,7 @@ pub const EVM = struct {
         self.gas_used += 3 + mem_cost;
     }
 
-    fn opSload(self: *EVM) !void {
+    pub fn opSload(self: *EVM) !void {
         const key = try self.stack.pop();
         const value = if (self.state_db) |db|
             db.getStorage(self.context.address, key) catch types.U256.zero()
@@ -3077,7 +3142,7 @@ pub const EVM = struct {
         }
     }
 
-    fn opSstore(self: *EVM) !void {
+    pub fn opSstore(self: *EVM) !void {
         if (self.is_static) return error.StaticStateChange;
         const key = try self.stack.pop();
         const new_value = try self.stack.pop();
@@ -3149,7 +3214,7 @@ pub const EVM = struct {
 
     /// EIP-1153: TLOAD - Load from transient storage
     /// Gas cost: 100 (warm storage read)
-    fn opTload(self: *EVM) !void {
+    pub fn opTload(self: *EVM) !void {
         const key = try self.stack.pop();
         const tkey = TransientKey{ .address = self.context.address, .key = key };
         const value = self.transient_storage.get(tkey) orelse types.U256.zero();
@@ -3159,7 +3224,7 @@ pub const EVM = struct {
 
     /// EIP-1153: TSTORE - Store to transient storage
     /// Gas cost: 100 (warm storage write)
-    fn opTstore(self: *EVM) !void {
+    pub fn opTstore(self: *EVM) !void {
         if (self.is_static) return error.StaticStateChange;
         const key = try self.stack.pop();
         const value = try self.stack.pop();
@@ -3168,13 +3233,13 @@ pub const EVM = struct {
         self.gas_used += 100;
     }
 
-    fn opJump(self: *EVM, pc: *usize) !void {
+    pub fn opJump(self: *EVM, pc: *usize) !void {
         const dest = try self.stack.pop();
         pc.* = @intCast(dest.limbs[0]);
         self.gas_used += 8;
     }
 
-    fn opJumpi(self: *EVM, pc: *usize) !void {
+    pub fn opJumpi(self: *EVM, pc: *usize) !void {
         const dest = try self.stack.pop();
         const condition = try self.stack.pop();
 
@@ -3184,7 +3249,7 @@ pub const EVM = struct {
         self.gas_used += 10;
     }
 
-    fn opReturn(self: *EVM) !void {
+    pub fn opReturn(self: *EVM) !void {
         const offset_u256 = try self.stack.pop();
         const length_u256 = try self.stack.pop();
         const offset = offset_u256.limbs[0];
@@ -3197,7 +3262,7 @@ pub const EVM = struct {
         self.gas_used += 0;
     }
 
-    fn opReturnDataSize(self: *EVM) !void {
+    pub fn opReturnDataSize(self: *EVM) !void {
         // Return size of data from last CALL/CREATE/DELEGATECALL
         // For now, return 0 (will be populated when CALL operations return data)
         const size = types.U256.fromU64(self.return_data.len);
@@ -3205,7 +3270,7 @@ pub const EVM = struct {
         self.gas_used += 2;
     }
 
-    fn opReturnDataCopy(self: *EVM) !void {
+    pub fn opReturnDataCopy(self: *EVM) !void {
         // Stack: memOffset, returnDataOffset, length
         const mem_offset_u256 = try self.stack.pop();
         const return_data_offset_u256 = try self.stack.pop();
@@ -3419,6 +3484,10 @@ pub const Opcode = enum(u8) {
     SELFDESTRUCT = 0xff,
 
     _,
+
+    pub fn nameFromByte(byte: u8) []const u8 {
+        return tracer_mod.opcodeNameFromByte(byte);
+    }
 };
 
 const Stack = struct {

@@ -574,8 +574,11 @@ test "journal: SELFDESTRUCT in nested call commits on success" {
 
     try testing.expect(result.success);
 
-    // Child account should be destroyed
-    try testing.expect(!db.exists(child_addr));
+    // EIP-6780: Child account was NOT created in same tx, so it is NOT destroyed.
+    // Balance is transferred but account remains.
+    try testing.expect(db.exists(child_addr));
+    const child_bal = try db.getBalance(child_addr);
+    try testing.expect(child_bal.isZero());
 
     // Beneficiary should have received child's balance (500)
     const ben_bal = try db.getBalance(beneficiary_addr);

@@ -122,6 +122,26 @@ pub const StateDB = struct {
         _ = self.accounts.remove(address);
     }
 
+    /// EIP-161: Remove empty accounts (nonce=0, balance=0, no code) from state.
+    /// Prevents state bloat from "touching" empty accounts.
+    pub fn cleanupEmptyAccounts(self: *StateDB) !void {
+        var to_remove = std.ArrayList(types.Address).init(self.allocator);
+        defer to_remove.deinit();
+
+        var it = self.accounts.iterator();
+        while (it.next()) |entry| {
+            const addr = entry.key_ptr.*;
+            const acct = entry.value_ptr.*;
+            if (acct.nonce == 0 and acct.balance.isZero() and self.getCode(addr).len == 0) {
+                try to_remove.append(addr);
+            }
+        }
+
+        for (to_remove.items) |addr| {
+            _ = self.accounts.remove(addr);
+        }
+    }
+
     pub fn computeStorageRoot(self: *StateDB, address: types.Address) !types.Hash {
         var trie = Trie.init(self.allocator);
         defer trie.deinit();
