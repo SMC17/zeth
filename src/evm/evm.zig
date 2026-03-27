@@ -41,6 +41,21 @@ pub const ExecutionContext = struct {
     }
 };
 
+/// Key for transient storage (EIP-1153): scoped by address + slot.
+pub const TransientKey = struct {
+    address: types.Address,
+    key: types.U256,
+};
+
+/// EIP-170: Maximum code size that can be deployed by CREATE/CREATE2.
+const MAX_CODE_SIZE: usize = 24576;
+
+/// EIP-3860: Maximum init code size for CREATE/CREATE2.
+const MAX_INITCODE_SIZE: usize = 2 * MAX_CODE_SIZE; // 49152
+
+/// EIP-3860: Per-word gas cost for init code.
+const INITCODE_WORD_GAS: u64 = 2;
+
 /// Ethereum Virtual Machine implementation
 pub const EVM = struct {
     allocator: std.mem.Allocator,
@@ -67,6 +82,8 @@ pub const EVM = struct {
     return_data_owned: ?[]u8 = null,
     halted: bool = false,
     is_static: bool = false,
+    // EIP-1153: Transient storage (tx-scoped, not journaled, survives REVERT)
+    transient_storage: std.AutoHashMap(TransientKey, types.U256),
     // State database for external account lookups (optional)
     state_db: ?*state.StateDB = null,
 
@@ -86,6 +103,7 @@ pub const EVM = struct {
             .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .selfdestructed_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .block_hashes = std.AutoHashMap(u64, types.Hash).init(allocator),
+            .transient_storage = std.AutoHashMap(TransientKey, types.U256).init(allocator),
             .state_db = null,
         };
     }
@@ -106,6 +124,7 @@ pub const EVM = struct {
             .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .selfdestructed_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .block_hashes = std.AutoHashMap(u64, types.Hash).init(allocator),
+            .transient_storage = std.AutoHashMap(TransientKey, types.U256).init(allocator),
             .state_db = null,
         };
     }
@@ -126,6 +145,7 @@ pub const EVM = struct {
             .warm_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .selfdestructed_accounts = std.AutoHashMap(types.Address, void).init(allocator),
             .block_hashes = std.AutoHashMap(u64, types.Hash).init(allocator),
+            .transient_storage = std.AutoHashMap(TransientKey, types.U256).init(allocator),
             .state_db = state_db,
         };
     }
@@ -159,6 +179,12 @@ pub const EVM = struct {
         while (selfdestruct_it.next()) |entry| {
             try self.selfdestructed_accounts.put(entry.key_ptr.*, {});
         }
+
+        // EIP-1153: Copy transient storage to child (tx-scoped, shared across call frames)
+        var transient_it = other.transient_storage.iterator();
+        while (transient_it.next()) |entry| {
+            try self.transient_storage.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
     }
 
     fn mergeChildTransactionTracking(self: *EVM, child: *const EVM, merge_selfdestructs: bool) !void {
@@ -185,6 +211,12 @@ pub const EVM = struct {
                 try self.selfdestructed_accounts.put(entry.key_ptr.*, {});
             }
         }
+
+        // EIP-1153: Always merge transient storage back (survives REVERT, tx-scoped)
+        var transient_it = child.transient_storage.iterator();
+        while (transient_it.next()) |entry| {
+            try self.transient_storage.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
     }
 
     pub fn deinit(self: *EVM) void {
@@ -198,6 +230,7 @@ pub const EVM = struct {
         self.warm_accounts.deinit();
         self.selfdestructed_accounts.deinit();
         self.block_hashes.deinit();
+        self.transient_storage.deinit();
     }
 
     pub fn setBlockHash(self: *EVM, block_number: u64, hash: types.Hash) !void {
@@ -1308,6 +1341,7 @@ pub const EVM = struct {
 
             // Stack operations
             .POP => try self.opPop(),
+            .PUSH0 => try self.opPush0(),
             .PUSH1 => try self.opPush(code, pc, 1),
             .PUSH2 => try self.opPush(code, pc, 2),
             .PUSH3 => try self.opPush(code, pc, 3),
@@ -1382,10 +1416,15 @@ pub const EVM = struct {
             .MSTORE => try self.opMstore(),
             .MSTORE8 => try self.opMstore8(),
             .MSIZE => try self.opMsize(),
+            .MCOPY => try self.opMcopy(),
 
             // Storage
             .SLOAD => try self.opSload(),
             .SSTORE => try self.opSstore(),
+
+            // Transient Storage (EIP-1153)
+            .TLOAD => try self.opTload(),
+            .TSTORE => try self.opTstore(),
 
             // Flow control
             .JUMP => try self.opJump(pc),
@@ -1898,6 +1937,46 @@ pub const EVM = struct {
         self.gas_used += 2;
     }
 
+    /// EIP-5656: MCOPY -- memory-to-memory copy with overlap support.
+    fn opMcopy(self: *EVM) !void {
+        const dst_offset = (try self.stack.pop()).limbs[0];
+        const src_offset = (try self.stack.pop()).limbs[0];
+        const length = (try self.stack.pop()).limbs[0];
+
+        if (length == 0) {
+            self.gas_used += 3;
+            return;
+        }
+
+        const new_size = @max(dst_offset + length, src_offset + length);
+        const mem_cost = self.memoryExpansionCost(@intCast(new_size));
+
+        if (new_size > self.memory.data.items.len) {
+            try self.memory.data.resize(@intCast(new_size));
+        }
+
+        const words = (length + 31) / 32;
+
+        // Overlap-safe copy: choose direction based on relative positions.
+        const len: usize = @intCast(length);
+        const dst = self.memory.data.items[@intCast(dst_offset)..][0..len];
+        const src = self.memory.data.items[@intCast(src_offset)..][0..len];
+        if (dst_offset <= src_offset) {
+            std.mem.copyForwards(u8, dst, src);
+        } else {
+            std.mem.copyBackwards(u8, dst, src);
+        }
+
+        // Gas: 3 (base VERYLOW) + 3 * words (copy cost) + memory expansion
+        self.gas_used += 3 + 3 * words + mem_cost;
+    }
+
+    /// EIP-3855: PUSH0 -- push the constant 0 onto the stack.
+    fn opPush0(self: *EVM) !void {
+        try self.stack.push(self.allocator, types.U256.zero());
+        self.gas_used += 2;
+    }
+
     fn opPc(self: *EVM, pc: *usize) !void {
         // PC returns the position of the current instruction
         // Since pc is incremented before executeOpcode, we subtract 1
@@ -2312,6 +2391,11 @@ pub const EVM = struct {
         const new_size = off + len;
         const mem_cost = self.memoryExpansionCost(@intCast(new_size));
 
+        // Charge gas BEFORE creating the log entry to prevent side effects on OOG.
+        const log_gas = 375 + 375 * topic_count + 8 * len + mem_cost;
+        self.gas_used += log_gas;
+        if (self.gas_used >= self.gas_limit) return error.OutOfGas;
+
         // Expand memory if needed
         if (new_size > self.memory.data.items.len) {
             try self.memory.data.resize(@intCast(new_size));
@@ -2325,9 +2409,6 @@ pub const EVM = struct {
             .topics = topics,
             .data = data,
         });
-
-        // Base cost + topic cost + data cost + memory expansion cost
-        self.gas_used += 375 + 375 * topic_count + 8 * len + mem_cost;
     }
 
     // REVERT opcode
@@ -2638,7 +2719,12 @@ pub const EVM = struct {
         if (new_size > self.memory.data.items.len) {
             try self.memory.data.resize(@intCast(new_size));
         }
-        const create_gas = 32000 + mem_cost + copy_gas;
+        // EIP-3860: Reject init code exceeding maximum size.
+        if (init_code.len > MAX_INITCODE_SIZE) return error.OutOfGas;
+
+        // EIP-3860: Charge per-word gas for init code.
+        const initcode_gas = INITCODE_WORD_GAS * words;
+        const create_gas = 32000 + mem_cost + copy_gas + initcode_gas;
         const available_gas = self.gas_limit -| self.gas_used;
         if (available_gas < create_gas) return error.OutOfGas;
         const child_gas_limit = (available_gas - create_gas) - ((available_gas - create_gas) / 64);
@@ -2703,6 +2789,13 @@ pub const EVM = struct {
             return;
         }
 
+        // EIP-170: Reject deployed code exceeding maximum size.
+        if (child_result.return_data.len > MAX_CODE_SIZE) {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += create_gas + @min(child_result.gas_used, child_gas_limit);
+            return;
+        }
+
         try db.setCode(new_address, child_result.return_data);
         try self.setReturnData(child_result.return_data);
         try self.stack.push(self.allocator, addressToU256(new_address));
@@ -2732,7 +2825,12 @@ pub const EVM = struct {
         if (new_size > self.memory.data.items.len) {
             try self.memory.data.resize(@intCast(new_size));
         }
-        const create2_gas = 32000 + mem_cost + copy_gas + hash_gas;
+        // EIP-3860: Reject init code exceeding maximum size.
+        if (init_code.len > MAX_INITCODE_SIZE) return error.OutOfGas;
+
+        // EIP-3860: Charge per-word gas for init code.
+        const initcode_gas = INITCODE_WORD_GAS * words;
+        const create2_gas = 32000 + mem_cost + copy_gas + hash_gas + initcode_gas;
         const available_gas = self.gas_limit -| self.gas_used;
         if (available_gas < create2_gas) return error.OutOfGas;
         const child_gas_limit = (available_gas - create2_gas) - ((available_gas - create2_gas) / 64);
@@ -2794,6 +2892,13 @@ pub const EVM = struct {
             return;
         }
 
+        // EIP-170: Reject deployed code exceeding maximum size.
+        if (child_result.return_data.len > MAX_CODE_SIZE) {
+            try self.stack.push(self.allocator, types.U256.zero());
+            self.gas_used += create2_gas + @min(child_result.gas_used, child_gas_limit);
+            return;
+        }
+
         try db.setCode(new_address, child_result.return_data);
         try self.setReturnData(child_result.return_data);
         try self.stack.push(self.allocator, addressToU256(new_address));
@@ -2818,6 +2923,10 @@ pub const EVM = struct {
                 selfdestruct_gas += 25000;
             }
 
+            // Charge gas BEFORE account destruction to prevent side effects on OOG.
+            self.gas_used += selfdestruct_gas;
+            if (self.gas_used >= self.gas_limit) return error.OutOfGas;
+
             if (!balance.isZero() and !from.eql(beneficiary_address)) {
                 if (!db.exists(beneficiary_address)) {
                     try db.createAccount(beneficiary_address);
@@ -2833,9 +2942,10 @@ pub const EVM = struct {
                 // EIP-3529: SELFDESTRUCT refund reduced to 4800.
                 self.gas_refund += 4800;
             }
+        } else {
+            self.gas_used += selfdestruct_gas;
         }
 
-        self.gas_used += selfdestruct_gas;
         self.halted = true;
     }
 
@@ -2995,11 +3105,35 @@ pub const EVM = struct {
             }
         }
 
+        // Check gas before committing the storage write to avoid side effects on OOG.
+        if (self.gas_used >= self.gas_limit) return error.OutOfGas;
+
         if (self.state_db) |db| {
             try db.setStorage(self.context.address, key, new_value);
         } else {
             try self.storage.store(key, new_value);
         }
+    }
+
+    /// EIP-1153: TLOAD - Load from transient storage
+    /// Gas cost: 100 (warm storage read)
+    fn opTload(self: *EVM) !void {
+        const key = try self.stack.pop();
+        const tkey = TransientKey{ .address = self.context.address, .key = key };
+        const value = self.transient_storage.get(tkey) orelse types.U256.zero();
+        try self.stack.push(self.allocator, value);
+        self.gas_used += 100;
+    }
+
+    /// EIP-1153: TSTORE - Store to transient storage
+    /// Gas cost: 100 (warm storage write)
+    fn opTstore(self: *EVM) !void {
+        if (self.is_static) return error.StaticStateChange;
+        const key = try self.stack.pop();
+        const value = try self.stack.pop();
+        const tkey = TransientKey{ .address = self.context.address, .key = key };
+        try self.transient_storage.put(tkey, value);
+        self.gas_used += 100;
     }
 
     fn opJump(self: *EVM, pc: *usize) !void {
@@ -3156,6 +3290,10 @@ pub const Opcode = enum(u8) {
     MSIZE = 0x59,
     GAS = 0x5a,
     JUMPDEST = 0x5b,
+    TLOAD = 0x5c, // EIP-1153 (Cancun)
+    TSTORE = 0x5d, // EIP-1153 (Cancun)
+    MCOPY = 0x5e, // EIP-5656 (Cancun)
+    PUSH0 = 0x5f, // EIP-3855 (Shanghai)
 
     // 60s & 70s: Push Operations
     PUSH1 = 0x60,

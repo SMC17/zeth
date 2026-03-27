@@ -41,6 +41,16 @@ pub fn build(b: *std.Build) void {
     evm_mod.addImport("crypto", crypto_mod);
     evm_mod.addImport("state", state_mod);
 
+    const transaction_mod = b.addModule("transaction", .{
+        .root_source_file = b.path("src/evm/transaction.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    transaction_mod.addImport("types", types_mod);
+    transaction_mod.addImport("crypto", crypto_mod);
+    transaction_mod.addImport("state", state_mod);
+    transaction_mod.addImport("evm", evm_mod);
+
     const sim_mod = b.addModule("sim", .{
         .root_source_file = b.path("src/sim.zig"),
         .target = target,
@@ -563,6 +573,23 @@ pub fn build(b: *std.Build) void {
     const run_reference_test_runner_tests = b.addRunArtifact(reference_test_runner_tests);
     test_step.dependOn(&run_reference_test_runner_tests.step);
 
+    // Transaction execution tests
+    const transaction_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/evm/transaction.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    transaction_test_mod.addImport("types", types_mod);
+    transaction_test_mod.addImport("crypto", crypto_mod);
+    transaction_test_mod.addImport("state", state_mod);
+    transaction_test_mod.addImport("evm", evm_mod);
+
+    const transaction_tests = b.addTest(.{
+        .root_module = transaction_test_mod,
+    });
+    const run_transaction_tests = b.addRunArtifact(transaction_tests);
+    test_step.dependOn(&run_transaction_tests.step);
+
     // Reference test runner executable
     const reference_test_exe_mod = b.createModule(.{
         .root_source_file = b.path("validation/run_reference_tests.zig"),
@@ -672,6 +699,32 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(riscv_exe);
 
-    const riscv_step = b.step("riscv", "Build zeth for RISC-V (riscv64-linux, zkVM path)");
+    const riscv_step = b.step("riscv", "Build zeth for RISC-V (riscv64-linux)");
     riscv_step.dependOn(&b.addInstallArtifact(riscv_exe, .{}).step);
+
+    // rv32im: zkVM target (SP1, RISC Zero, Jolt) — freestanding, no OS
+    const riscv32_target = b.resolveTargetQuery(.{
+        .cpu_arch = .riscv32,
+        .os_tag = .freestanding,
+    });
+    const riscv32_exe_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = riscv32_target,
+        .optimize = .ReleaseSmall,
+    });
+    riscv32_exe_mod.addImport("types", types_mod);
+    riscv32_exe_mod.addImport("crypto", crypto_mod);
+    riscv32_exe_mod.addImport("rlp", rlp_mod);
+    riscv32_exe_mod.addImport("evm", evm_mod);
+    riscv32_exe_mod.addImport("state", state_mod);
+
+    const riscv32_exe = b.addExecutable(.{
+        .name = "zeth-rv32",
+        .root_module = riscv32_exe_mod,
+    });
+    riscv32_exe.entry = .disabled;
+    b.installArtifact(riscv32_exe);
+
+    const riscv32_step = b.step("riscv32", "Build zeth for RV32IM (zkVM: SP1, RISC Zero, Jolt)");
+    riscv32_step.dependOn(&b.addInstallArtifact(riscv32_exe, .{}).step);
 }

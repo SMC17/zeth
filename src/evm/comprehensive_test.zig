@@ -2648,10 +2648,10 @@ test "EVM: CREATE2 charges additional hashcost over CREATE for same init code le
     defer if (r2.return_data.len > 0) allocator.free(r2.return_data);
     defer allocator.free(r2.logs);
 
-    // CREATE: 3 PUSH1 + (32000 + 6 mem + 6 copy) = 32021
-    try testing.expectEqual(@as(u64, 32_021), vm_create.gas_used);
-    // CREATE2: 4 PUSH1 + (32000 + 6 mem + 6 copy + 12 hashcost) = 32036
-    try testing.expectEqual(@as(u64, 32_036), vm_create2.gas_used);
+    // CREATE: 3 PUSH1 + (32000 + 6 mem + 6 copy + 4 initcode) = 32025
+    try testing.expectEqual(@as(u64, 32_025), vm_create.gas_used);
+    // CREATE2: 4 PUSH1 + (32000 + 6 mem + 6 copy + 12 hashcost + 4 initcode) = 32040
+    try testing.expectEqual(@as(u64, 32_040), vm_create2.gas_used);
 }
 
 test "EVM: CALL OOG in child obeys EIP-150 reserve and does not exhaust parent" {
@@ -3270,9 +3270,9 @@ test "EVM: CREATE memory expansion persists across repeated creates" {
     defer if (result.return_data.len > 0) allocator.free(result.return_data);
     defer allocator.free(result.logs);
 
-    // First: 9 push + (32000 + 3 mem + 3 copy) = 32015
-    // Second: 9 push + (32000 + 0 mem + 3 copy) = 32012
-    try testing.expectEqual(@as(u64, 64_027), vm.gas_used);
+    // First: 9 push + (32000 + 3 mem + 3 copy + 2 initcode) = 32017
+    // Second: 9 push + (32000 + 0 mem + 3 copy + 2 initcode) = 32014
+    try testing.expectEqual(@as(u64, 64_031), vm.gas_used);
 }
 
 test "EVM: nested CALL revert restores child storage" {
@@ -3792,9 +3792,9 @@ test "EVM: CREATE2 exact gas with hash cost" {
 
     // 4 pushes = 12 gas
     // words = ceil(32/32) = 1
-    // CREATE2 base: 32000 + 3(mem, 1 word) + 3(copy, 1*3) + 6(hash, 1*6) = 32012
+    // CREATE2 base: 32000 + 3(mem, 1 word) + 3(copy, 1*3) + 6(hash, 1*6) + 2(initcode, 1*2) = 32014
     // Child executes STOP immediately => gas_used = 0
-    try testing.expectEqual(@as(u64, 32_024), vm.gas_used);
+    try testing.expectEqual(@as(u64, 32_026), vm.gas_used);
 }
 
 test "EVM: nested CALL child refund propagates on success not on failure" {
@@ -3914,4 +3914,561 @@ test "EVM: nested CALL child refund propagates on success not on failure" {
         // Child reverted, so parent gas_refund must remain unchanged (zero).
         try testing.expectEqual(@as(u64, 0), vm.gas_refund);
     }
+}
+
+// =============================================================================
+// EIP-3855: PUSH0 tests
+// =============================================================================
+
+test "EVM: PUSH0 pushes zero onto stack" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1000000);
+    defer vm.deinit();
+
+    // PUSH0, STOP
+    const bytecode = [_]u8{ 0x5f, 0x00 };
+    const result = try vm.execute(&bytecode, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const top = try vm.stack.pop();
+    try testing.expect(top.isZero());
+    // PUSH0 costs 2 gas
+    try testing.expectEqual(@as(u64, 2), result.gas_used);
+}
+
+// =============================================================================
+// EIP-5656: MCOPY tests
+// =============================================================================
+
+test "EVM: MCOPY non-overlapping copy" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1000000);
+    defer vm.deinit();
+
+    // Store 0xDEADBEEF at memory offset 0 via MSTORE
+    // Then MCOPY from offset 0 to offset 64, length 32
+    // Then MLOAD from offset 64 to verify
+    const bytecode = [_]u8{
+        0x63, 0xDE, 0xAD, 0xBE, 0xEF, // PUSH4 0xDEADBEEF
+        0x60, 0x00, // PUSH1 0 (offset)
+        0x52, // MSTORE (stores at offset 0)
+        // MCOPY: stack order is dst, src, length
+        0x60, 0x20, // PUSH1 32 (length)
+        0x60, 0x00, // PUSH1 0 (src_offset)
+        0x60, 0x40, // PUSH1 64 (dst_offset)
+        0x5e, // MCOPY
+        // Load from offset 64 to verify
+        0x60, 0x40, // PUSH1 64
+        0x51, // MLOAD
+        0x00, // STOP
+    };
+
+    const result = try vm.execute(&bytecode, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const top = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 0xDEADBEEF), top.limbs[0]);
+}
+
+test "EVM: MCOPY overlapping forward (src < dst)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1000000);
+    defer vm.deinit();
+
+    // Store data at offset 0, MCOPY 32 bytes from offset 0 to offset 16
+    // This is an overlapping forward copy where dst > src.
+    const bytecode = [_]u8{
+        // Store a known value at memory[0..32]
+        0x7f, // PUSH32
+        0x01,
+        0x02,
+        0x03,
+        0x04,
+        0x05,
+        0x06,
+        0x07,
+        0x08,
+        0x09,
+        0x0A,
+        0x0B,
+        0x0C,
+        0x0D,
+        0x0E,
+        0x0F,
+        0x10,
+        0x11,
+        0x12,
+        0x13,
+        0x14,
+        0x15,
+        0x16,
+        0x17,
+        0x18,
+        0x19,
+        0x1A,
+        0x1B,
+        0x1C,
+        0x1D,
+        0x1E,
+        0x1F,
+        0x20,
+        0x60, 0x00, // PUSH1 0
+        0x52, // MSTORE at offset 0
+        // MCOPY: dst=16, src=0, length=32
+        0x60, 0x20, // PUSH1 32 (length)
+        0x60, 0x00, // PUSH1 0 (src)
+        0x60, 0x10, // PUSH1 16 (dst)
+        0x5e, // MCOPY
+        // Load from offset 16 to verify the first 32 bytes starting at dst
+        0x60, 0x10, // PUSH1 16
+        0x51, // MLOAD
+        0x00, // STOP
+    };
+
+    const result = try vm.execute(&bytecode, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    // memory[16..48] should contain the original memory[0..32] data
+    const top = try vm.stack.pop();
+    // The original data at [0..32] was 0x0102...1F20
+    // After MCOPY(dst=16, src=0, len=32), memory[16..48] = original memory[0..32]
+    // MLOAD at 16 reads memory[16..48] which should be the original value
+    const expected_bytes = [32]u8{
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+        0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+        0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20,
+    };
+    const expected = types.U256.fromBytes(expected_bytes);
+    try testing.expectEqual(expected, top);
+}
+
+test "EVM: MCOPY overlapping backward (dst < src)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1000000);
+    defer vm.deinit();
+
+    // Store data at offset 16, MCOPY 32 bytes from offset 16 to offset 0
+    // Overlapping backward copy where dst < src.
+    const bytecode = [_]u8{
+        // Store a known value at memory[16..48]
+        0x7f, // PUSH32
+        0xA1,
+        0xA2,
+        0xA3,
+        0xA4,
+        0xA5,
+        0xA6,
+        0xA7,
+        0xA8,
+        0xB1,
+        0xB2,
+        0xB3,
+        0xB4,
+        0xB5,
+        0xB6,
+        0xB7,
+        0xB8,
+        0xC1,
+        0xC2,
+        0xC3,
+        0xC4,
+        0xC5,
+        0xC6,
+        0xC7,
+        0xC8,
+        0xD1,
+        0xD2,
+        0xD3,
+        0xD4,
+        0xD5,
+        0xD6,
+        0xD7,
+        0xD8,
+        0x60, 0x10, // PUSH1 16
+        0x52, // MSTORE at offset 16
+        // MCOPY: dst=0, src=16, length=32
+        0x60, 0x20, // PUSH1 32 (length)
+        0x60, 0x10, // PUSH1 16 (src)
+        0x60, 0x00, // PUSH1 0 (dst)
+        0x5e, // MCOPY
+        // Load from offset 0 to verify
+        0x60, 0x00, // PUSH1 0
+        0x51, // MLOAD
+        0x00, // STOP
+    };
+
+    const result = try vm.execute(&bytecode, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const top = try vm.stack.pop();
+    const expected_bytes = [32]u8{
+        0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8,
+        0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8,
+        0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8,
+        0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0xD8,
+    };
+    const expected = types.U256.fromBytes(expected_bytes);
+    try testing.expectEqual(expected, top);
+}
+
+test "EVM: MCOPY zero length costs only base gas" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 1000000);
+    defer vm.deinit();
+
+    // MCOPY with length=0: should cost only 3 gas (base), no memory expansion
+    const bytecode = [_]u8{
+        0x60, 0x00, // PUSH1 0 (length)
+        0x60, 0x00, // PUSH1 0 (src)
+        0x60, 0x00, // PUSH1 0 (dst)
+        0x5e, // MCOPY
+        0x00, // STOP
+    };
+
+    const result = try vm.execute(&bytecode, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    // 3 * PUSH1 (3 gas each) + MCOPY zero-length (3 gas) = 12
+    try testing.expectEqual(@as(u64, 12), result.gas_used);
+    // Memory should not have expanded
+    try testing.expectEqual(@as(usize, 0), vm.memory.data.items.len);
+}
+
+// ===== EIP-1153: Transient Storage (TLOAD / TSTORE) =====
+
+test "EVM: TSTORE then TLOAD returns stored value" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 100_000);
+    defer vm.deinit();
+
+    // TSTORE(key=1, value=0x42), then TLOAD(key=1)
+    const code = [_]u8{
+        0x60, 0x42, // PUSH1 0x42 (value)
+        0x60, 0x01, // PUSH1 0x01 (key)
+        0x5d, // TSTORE
+        0x60, 0x01, // PUSH1 0x01 (key)
+        0x5c, // TLOAD
+        0x00, // STOP
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const loaded = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 0x42), loaded.limbs[0]);
+
+    // Gas: 2*PUSH1(3) + TSTORE(100) + PUSH1(3) + TLOAD(100) = 209
+    try testing.expectEqual(@as(u64, 209), vm.gas_used);
+}
+
+test "EVM: TLOAD of unset key returns 0" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 100_000);
+    defer vm.deinit();
+
+    // TLOAD(key=0xff) without prior TSTORE
+    const code = [_]u8{
+        0x60, 0xff, // PUSH1 0xff (key)
+        0x5c, // TLOAD
+        0x00, // STOP
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    const loaded = try vm.stack.pop();
+    try testing.expect(loaded.isZero());
+}
+
+test "EVM: TSTORE in static context returns error" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    // Callee tries to TSTORE inside a STATICCALL
+    var callee_addr = types.Address.zero;
+    callee_addr.bytes[19] = 0x0c;
+    const callee_code = [_]u8{
+        0x60, 0x42, // PUSH1 value
+        0x60, 0x01, // PUSH1 key
+        0x5d, // TSTORE (must fail under STATICCALL)
+        0x00, // STOP
+    };
+    try db.createAccount(callee_addr);
+    try db.setCode(callee_addr, &callee_code);
+
+    var caller = types.Address.zero;
+    caller.bytes[19] = 0xaa;
+    try db.createAccount(caller);
+
+    var context = evm.ExecutionContext.default();
+    context.address = caller;
+    context.caller = caller;
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, context, &db);
+    defer vm.deinit();
+
+    // STATICCALL to callee
+    const code = [_]u8{
+        0x60, 0x00, // outSize
+        0x60, 0x00, // outOffset
+        0x60, 0x00, // inSize
+        0x60, 0x00, // inOffset
+        0x60, 0x0c, // address
+        0x61, 0xff, 0xff, // gas
+        0xfa, // STATICCALL
+    };
+
+    _ = try vm.execute(&code, &[_]u8{});
+    // STATICCALL should return 0 (failure) because TSTORE in static context is not allowed
+    const success = try vm.stack.pop();
+    try testing.expect(success.isZero());
+}
+
+test "EVM: transient storage is per-address" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 100_000);
+    defer vm.deinit();
+
+    // Store value under address A
+    var addr_a = types.Address.zero;
+    addr_a.bytes[19] = 0x0a;
+    var addr_b = types.Address.zero;
+    addr_b.bytes[19] = 0x0b;
+
+    const key = types.U256.fromU64(1);
+    const val_a = types.U256.fromU64(0xaa);
+    const val_b = types.U256.fromU64(0xbb);
+
+    // Manually store transient values for two different addresses
+    try vm.transient_storage.put(.{ .address = addr_a, .key = key }, val_a);
+    try vm.transient_storage.put(.{ .address = addr_b, .key = key }, val_b);
+
+    // Set context to address A and TLOAD
+    vm.context.address = addr_a;
+    const code_tload = [_]u8{
+        0x60, 0x01, // PUSH1 key=1
+        0x5c, // TLOAD
+        0x00, // STOP
+    };
+
+    const result_a = try vm.execute(&code_tload, &[_]u8{});
+    defer if (result_a.return_data.len > 0) allocator.free(result_a.return_data);
+    defer allocator.free(result_a.logs);
+
+    const loaded_a = try vm.stack.pop();
+    try testing.expectEqual(@as(u64, 0xaa), loaded_a.limbs[0]);
+}
+
+test "EVM: transient storage survives child REVERT via CALL" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    // Callee: TSTORE(key=7, value=0x99), then REVERT
+    var callee_addr = types.Address.zero;
+    callee_addr.bytes[19] = 0x0d;
+    const callee_code = [_]u8{
+        0x60, 0x99, // PUSH1 0x99 (value)
+        0x60, 0x07, // PUSH1 0x07 (key)
+        0x5d, // TSTORE
+        0x60, 0x00, // PUSH1 0 (length)
+        0x60, 0x00, // PUSH1 0 (offset)
+        0xfd, // REVERT
+    };
+    try db.createAccount(callee_addr);
+    try db.setCode(callee_addr, &callee_code);
+
+    var caller = types.Address.zero;
+    caller.bytes[19] = 0xcc;
+    try db.createAccount(caller);
+
+    var context = evm.ExecutionContext.default();
+    context.address = caller;
+    context.caller = caller;
+
+    var vm = try evm.EVM.initWithState(allocator, 1_000_000, context, &db);
+    defer vm.deinit();
+
+    // CALL to callee (which will TSTORE then REVERT)
+    // After the reverted CALL, transient storage should still have the value
+    // because EIP-1153 transient storage is NOT journaled.
+    const code = [_]u8{
+        // CALL(gas=0xffff, addr=0x0d, value=0, inOff=0, inSize=0, outOff=0, outSize=0)
+        0x60, 0x00, // retSize
+        0x60, 0x00, // retOffset
+        0x60, 0x00, // argsSize
+        0x60, 0x00, // argsOffset
+        0x60, 0x00, // value
+        0x60, 0x0d, // address
+        0x61, 0xff, 0xff, // gas
+        0xf1, // CALL
+        0x50, // POP the call result
+        0x00, // STOP
+    };
+
+    const result = try vm.execute(&code, &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    // After the reverted CALL, transient storage for the callee address should
+    // still have the value because transient storage survives REVERT.
+    const tkey = evm.TransientKey{ .address = callee_addr, .key = types.U256.fromU64(7) };
+    const stored = vm.transient_storage.get(tkey) orelse types.U256.zero();
+    try testing.expectEqual(@as(u64, 0x99), stored.limbs[0]);
+}
+
+test "EVM: CREATE fails when deployed code exceeds EIP-170 MAX_CODE_SIZE" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    const creator = types.Address{ .bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xAA } };
+    try db.createAccount(creator);
+    try db.setBalance(creator, types.U256.fromU64(1_000_000));
+
+    var context = evm.ExecutionContext.default();
+    context.address = creator;
+    context.caller = creator;
+
+    // Build init code that RETURNs 24577 bytes (one over the 24576 limit).
+    // The init code: PUSH2 0x6001 (24577), PUSH1 0x00, RETURN => 61 60 01 60 00 F3
+    const init_code = [_]u8{ 0x61, 0x60, 0x01, 0x60, 0x00, 0xF3 };
+
+    // Store init code in memory via MSTORE8, then call CREATE.
+    var code_buf: [256]u8 = undefined;
+    var ci: usize = 0;
+    for (init_code, 0..) |b, idx2| {
+        code_buf[ci] = 0x60;
+        ci += 1;
+        code_buf[ci] = b;
+        ci += 1; // PUSH1 byte
+        code_buf[ci] = 0x60;
+        ci += 1;
+        code_buf[ci] = @intCast(idx2);
+        ci += 1; // PUSH1 offset
+        code_buf[ci] = 0x53;
+        ci += 1; // MSTORE8
+    }
+    // CREATE pops: value, offset, length. Push in reverse: length, offset, value.
+    code_buf[ci] = 0x60;
+    ci += 1;
+    code_buf[ci] = 0x06;
+    ci += 1; // length=6
+    code_buf[ci] = 0x60;
+    ci += 1;
+    code_buf[ci] = 0x00;
+    ci += 1; // offset=0
+    code_buf[ci] = 0x60;
+    ci += 1;
+    code_buf[ci] = 0x00;
+    ci += 1; // value=0
+    code_buf[ci] = 0xF0;
+    ci += 1; // CREATE
+
+    var vm = try evm.EVM.initWithState(allocator, 50_000_000, context, &db);
+    defer vm.deinit();
+
+    const result = try vm.execute(code_buf[0..ci], &[_]u8{});
+    defer if (result.return_data.len > 0) allocator.free(result.return_data);
+    defer allocator.free(result.logs);
+
+    // CREATE should return 0 (failure) because output exceeds MAX_CODE_SIZE.
+    const addr_result = try vm.stack.pop();
+    try testing.expect(addr_result.isZero());
+}
+
+test "EVM: CREATE with init code exceeding EIP-3860 MAX_INITCODE_SIZE fails" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    const creator = types.Address{ .bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xBB } };
+    try db.createAccount(creator);
+    try db.setBalance(creator, types.U256.fromU64(1_000_000));
+
+    var context = evm.ExecutionContext.default();
+    context.address = creator;
+    context.caller = creator;
+
+    // CREATE pops: value, offset, length. Push in reverse: length, offset, value.
+    // length = 49153 (0x00C001) > MAX_INITCODE_SIZE (49152).
+    const code = [_]u8{
+        0x62, 0x00, 0xC0, 0x01, // PUSH3 49153 (length)
+        0x60, 0x00, // PUSH1 0 (offset)
+        0x60, 0x00, // PUSH1 0 (value)
+        0xF0, // CREATE
+    };
+
+    var vm = try evm.EVM.initWithState(allocator, 500_000_000, context, &db);
+    defer vm.deinit();
+
+    // Should fail with OutOfGas due to EIP-3860 initcode size limit.
+    const err = vm.execute(&code, &[_]u8{});
+    try testing.expectError(error.OutOfGas, err);
+}
+
+test "EVM: CREATE2 with init code exceeding EIP-3860 MAX_INITCODE_SIZE fails" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var db = state.StateDB.init(allocator);
+    defer db.deinit();
+
+    const creator = types.Address{ .bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xCC } };
+    try db.createAccount(creator);
+    try db.setBalance(creator, types.U256.fromU64(1_000_000));
+
+    var context = evm.ExecutionContext.default();
+    context.address = creator;
+    context.caller = creator;
+
+    // CREATE2 pops: value, offset, length, salt. Push in reverse: salt, length, offset, value.
+    // length = 49153 (0x00C001) > MAX_INITCODE_SIZE (49152).
+    const code = [_]u8{
+        0x60, 0x00, // PUSH1 0 (salt)
+        0x62, 0x00, 0xC0, 0x01, // PUSH3 49153 (length)
+        0x60, 0x00, // PUSH1 0 (offset)
+        0x60, 0x00, // PUSH1 0 (value)
+        0xF5, // CREATE2
+    };
+
+    var vm = try evm.EVM.initWithState(allocator, 500_000_000, context, &db);
+    defer vm.deinit();
+
+    // Should fail with OutOfGas due to EIP-3860 initcode size limit.
+    const err = vm.execute(&code, &[_]u8{});
+    try testing.expectError(error.OutOfGas, err);
 }
