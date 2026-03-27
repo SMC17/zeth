@@ -60,6 +60,15 @@ pub fn build(b: *std.Build) void {
     sim_mod.addImport("types", types_mod);
     sim_mod.addImport("state", state_mod);
 
+    // zkVM guest module (native target for tests; rv32 target for proving)
+    const zkvm_mod = b.addModule("zkvm", .{
+        .root_source_file = b.path("src/zkvm/zeth_guest.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    zkvm_mod.addImport("evm", evm_mod);
+    zkvm_mod.addImport("types", types_mod);
+
     // Main executable
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -268,6 +277,30 @@ pub fn build(b: *std.Build) void {
     const validate_vm_step = b.step("validate-vm", "Run Ethereum VMTests (requires ethereum-tests clone)");
     validate_vm_step.dependOn(&vm_test_runner_run.step);
 
+    // GeneralStateTests runner (ethereum consensus state tests)
+    const state_test_runner_mod = b.createModule(.{
+        .root_source_file = b.path("validation/state_test_runner.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    state_test_runner_mod.addImport("evm", evm_mod);
+    state_test_runner_mod.addImport("types", types_mod);
+    state_test_runner_mod.addImport("state", state_mod);
+    state_test_runner_mod.addImport("transaction", transaction_mod);
+
+    const state_test_runner_exe = b.addExecutable(.{
+        .name = "state_test_runner",
+        .root_module = state_test_runner_mod,
+    });
+    b.installArtifact(state_test_runner_exe);
+
+    const state_test_runner_run = b.addRunArtifact(state_test_runner_exe);
+    if (b.args) |args| {
+        state_test_runner_run.addArgs(args);
+    }
+    const state_test_step = b.step("state-test", "Run Ethereum GeneralStateTests (requires ethereum-tests clone)");
+    state_test_step.dependOn(&state_test_runner_run.step);
+
     // Vector pipeline: convert VMTests to vectors, run regression
     const vector_runner_mod = b.createModule(.{
         .root_source_file = b.path("validation/vector_runner.zig"),
@@ -325,6 +358,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = .ReleaseSmall,
     });
+    evmc_mod.addImport("types", types_mod);
+    evmc_mod.addImport("evm", evm_mod);
+    evmc_mod.addImport("state", state_mod);
     const evmc_lib = b.addSharedLibrary(.{
         .name = "zeth_evmc",
         .root_module = evmc_mod,
@@ -333,6 +369,16 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(evmc_lib);
     const evmc_step = b.step("evmc", "Build EVMC plugin (libzeth_evmc.so/.dylib)");
     evmc_step.dependOn(&b.addInstallArtifact(evmc_lib, .{}).step);
+
+    // EVMC test module (for unit tests; uses same source, native target)
+    const evmc_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/evmc/zeth_evmc.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    evmc_test_mod.addImport("types", types_mod);
+    evmc_test_mod.addImport("evm", evm_mod);
+    evmc_test_mod.addImport("state", state_mod);
 
     // Differential fuzzing harness
     // Tests
@@ -590,6 +636,40 @@ pub fn build(b: *std.Build) void {
     const run_transaction_tests = b.addRunArtifact(transaction_tests);
     test_step.dependOn(&run_transaction_tests.step);
 
+    // EVMC bridge tests
+    const evmc_tests = b.addTest(.{
+        .root_module = evmc_test_mod,
+    });
+    const run_evmc_tests = b.addRunArtifact(evmc_tests);
+    test_step.dependOn(&run_evmc_tests.step);
+
+    // zkVM I/O layer tests
+    const zkvm_io_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/zkvm/io.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const zkvm_io_tests = b.addTest(.{
+        .root_module = zkvm_io_test_mod,
+    });
+    const run_zkvm_io_tests = b.addRunArtifact(zkvm_io_tests);
+    test_step.dependOn(&run_zkvm_io_tests.step);
+
+    // zkVM guest program tests
+    const zkvm_guest_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/zkvm/zeth_guest.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    zkvm_guest_test_mod.addImport("evm", evm_mod);
+    zkvm_guest_test_mod.addImport("types", types_mod);
+
+    const zkvm_guest_tests = b.addTest(.{
+        .root_module = zkvm_guest_test_mod,
+    });
+    const run_zkvm_guest_tests = b.addRunArtifact(zkvm_guest_tests);
+    test_step.dependOn(&run_zkvm_guest_tests.step);
+
     // Reference test runner executable
     const reference_test_exe_mod = b.createModule(.{
         .root_source_file = b.path("validation/run_reference_tests.zig"),
@@ -702,27 +782,61 @@ pub fn build(b: *std.Build) void {
     const riscv_step = b.step("riscv", "Build zeth for RISC-V (riscv64-linux)");
     riscv_step.dependOn(&b.addInstallArtifact(riscv_exe, .{}).step);
 
-    // rv32im: zkVM target (SP1, RISC Zero, Jolt) — freestanding, no OS
+    // rv32im: zkVM target (SP1, RISC Zero, Jolt)
+    // Use linux-musl so std library compiles (page_allocator needs POSIX stubs).
+    // The guest only uses FixedBufferAllocator — no actual syscalls at runtime.
     const riscv32_target = b.resolveTargetQuery(.{
         .cpu_arch = .riscv32,
-        .os_tag = .freestanding,
+        .os_tag = .linux,
+        .abi = .musl,
     });
-    const riscv32_exe_mod = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
+    const rv32_opt: std.builtin.OptimizeMode = .ReleaseSmall;
+
+    const rv32_types_mod = b.addModule("rv32_types", .{
+        .root_source_file = b.path("src/types/types.zig"),
         .target = riscv32_target,
-        .optimize = .ReleaseSmall,
+        .optimize = rv32_opt,
     });
-    riscv32_exe_mod.addImport("types", types_mod);
-    riscv32_exe_mod.addImport("crypto", crypto_mod);
-    riscv32_exe_mod.addImport("rlp", rlp_mod);
-    riscv32_exe_mod.addImport("evm", evm_mod);
-    riscv32_exe_mod.addImport("state", state_mod);
+    const rv32_crypto_mod = b.addModule("rv32_crypto", .{
+        .root_source_file = b.path("src/crypto/crypto.zig"),
+        .target = riscv32_target,
+        .optimize = rv32_opt,
+    });
+    const rv32_rlp_mod = b.addModule("rv32_rlp", .{
+        .root_source_file = b.path("src/rlp/rlp.zig"),
+        .target = riscv32_target,
+        .optimize = rv32_opt,
+    });
+    const rv32_state_mod = b.addModule("rv32_state", .{
+        .root_source_file = b.path("src/state/state.zig"),
+        .target = riscv32_target,
+        .optimize = rv32_opt,
+    });
+    rv32_state_mod.addImport("types", rv32_types_mod);
+    rv32_state_mod.addImport("crypto", rv32_crypto_mod);
+    rv32_state_mod.addImport("rlp", rv32_rlp_mod);
+
+    const rv32_evm_mod = b.addModule("rv32_evm", .{
+        .root_source_file = b.path("src/evm/evm.zig"),
+        .target = riscv32_target,
+        .optimize = rv32_opt,
+    });
+    rv32_evm_mod.addImport("types", rv32_types_mod);
+    rv32_evm_mod.addImport("crypto", rv32_crypto_mod);
+    rv32_evm_mod.addImport("state", rv32_state_mod);
+
+    const riscv32_exe_mod = b.createModule(.{
+        .root_source_file = b.path("src/zkvm/zeth_guest.zig"),
+        .target = riscv32_target,
+        .optimize = rv32_opt,
+    });
+    riscv32_exe_mod.addImport("types", rv32_types_mod);
+    riscv32_exe_mod.addImport("evm", rv32_evm_mod);
 
     const riscv32_exe = b.addExecutable(.{
         .name = "zeth-rv32",
         .root_module = riscv32_exe_mod,
     });
-    riscv32_exe.entry = .disabled;
     b.installArtifact(riscv32_exe);
 
     const riscv32_step = b.step("riscv32", "Build zeth for RV32IM (zkVM: SP1, RISC Zero, Jolt)");

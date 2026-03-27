@@ -4472,3 +4472,141 @@ test "EVM: CREATE2 with init code exceeding EIP-3860 MAX_INITCODE_SIZE fails" {
     const err = vm.execute(&code, &[_]u8{});
     try testing.expectError(error.OutOfGas, err);
 }
+
+// =============================================================================
+// EIP-4844: BLOBHASH (0x49)
+// =============================================================================
+
+test "BLOBHASH returns correct versioned hash at valid index" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Build two sample versioned hashes
+    var hash0: types.Hash = undefined;
+    @memset(&hash0.bytes, 0);
+    hash0.bytes[0] = 0x01; // version byte
+    hash0.bytes[31] = 0xAA;
+
+    var hash1: types.Hash = undefined;
+    @memset(&hash1.bytes, 0);
+    hash1.bytes[0] = 0x01;
+    hash1.bytes[31] = 0xBB;
+
+    const hashes = [_]types.Hash{ hash0, hash1 };
+
+    var context = evm.ExecutionContext.default();
+    context.blob_versioned_hashes = &hashes;
+
+    var vm = try evm.EVM.init(allocator, 100_000);
+    defer vm.deinit();
+    vm.context = context;
+
+    // PUSH1 0x00, BLOBHASH => should return hash0
+    const bytecode = [_]u8{
+        0x60, 0x00, // PUSH1 0
+        0x49, // BLOBHASH
+    };
+
+    const result = try vm.execute(&bytecode, &[_]u8{});
+    try testing.expect(result.success);
+
+    const top = try vm.stack.pop();
+    const expected = types.U256.fromBytes(hash0.bytes);
+    try testing.expectEqual(expected, top);
+}
+
+test "BLOBHASH returns zero for out-of-range index" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var hash0: types.Hash = undefined;
+    @memset(&hash0.bytes, 0);
+    hash0.bytes[0] = 0x01;
+    hash0.bytes[31] = 0xAA;
+
+    const hashes = [_]types.Hash{hash0};
+
+    var context = evm.ExecutionContext.default();
+    context.blob_versioned_hashes = &hashes;
+
+    var vm = try evm.EVM.init(allocator, 100_000);
+    defer vm.deinit();
+    vm.context = context;
+
+    // PUSH1 0x05 (index 5, only 1 hash), BLOBHASH => should return 0
+    const bytecode = [_]u8{
+        0x60, 0x05, // PUSH1 5
+        0x49, // BLOBHASH
+    };
+
+    const result = try vm.execute(&bytecode, &[_]u8{});
+    try testing.expect(result.success);
+
+    const top = try vm.stack.pop();
+    try testing.expectEqual(types.U256.zero(), top);
+}
+
+test "BLOBHASH returns zero when no blob hashes configured" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 100_000);
+    defer vm.deinit();
+    // blob_versioned_hashes defaults to null
+
+    const bytecode = [_]u8{
+        0x60, 0x00, // PUSH1 0
+        0x49, // BLOBHASH
+    };
+
+    const result = try vm.execute(&bytecode, &[_]u8{});
+    try testing.expect(result.success);
+
+    const top = try vm.stack.pop();
+    try testing.expectEqual(types.U256.zero(), top);
+}
+
+// =============================================================================
+// EIP-7516: BLOBBASEFEE (0x4a)
+// =============================================================================
+
+test "BLOBBASEFEE returns configured blob base fee" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var context = evm.ExecutionContext.default();
+    context.block_blob_base_fee = 42_000;
+
+    var vm = try evm.EVM.init(allocator, 100_000);
+    defer vm.deinit();
+    vm.context = context;
+
+    const bytecode = [_]u8{
+        0x4a, // BLOBBASEFEE
+    };
+
+    const result = try vm.execute(&bytecode, &[_]u8{});
+    try testing.expect(result.success);
+
+    const top = try vm.stack.pop();
+    try testing.expectEqual(types.U256.fromU64(42_000), top);
+}
+
+test "BLOBBASEFEE returns zero when not configured" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var vm = try evm.EVM.init(allocator, 100_000);
+    defer vm.deinit();
+    // block_blob_base_fee defaults to null
+
+    const bytecode = [_]u8{
+        0x4a, // BLOBBASEFEE
+    };
+
+    const result = try vm.execute(&bytecode, &[_]u8{});
+    try testing.expect(result.success);
+
+    const top = try vm.stack.pop();
+    try testing.expectEqual(types.U256.zero(), top);
+}

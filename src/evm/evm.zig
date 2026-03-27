@@ -20,6 +20,8 @@ pub const ExecutionContext = struct {
     chain_id: u64,
     block_base_fee: ?u64 = null, // EIP-1559 base fee
     block_prev_randao: ?types.U256 = null, // Post-Merge: opcode 0x44 returns PREVRANDAO when set
+    blob_versioned_hashes: ?[]const types.Hash = null, // EIP-4844 (Cancun)
+    block_blob_base_fee: ?u64 = null, // EIP-7516 (Cancun)
 
     pub fn default() ExecutionContext {
         return ExecutionContext{
@@ -37,6 +39,8 @@ pub const ExecutionContext = struct {
             .chain_id = 1, // Mainnet
             .block_base_fee = null,
             .block_prev_randao = null,
+            .blob_versioned_hashes = null,
+            .block_blob_base_fee = null,
         };
     }
 };
@@ -1458,6 +1462,8 @@ pub const EVM = struct {
             .GASLIMIT => try self.opGasLimit(),
             .CHAINID => try self.opChainId(),
             .BASEFEE => try self.opBaseFee(),
+            .BLOBHASH => try self.opBlobHash(),
+            .BLOBBASEFEE => try self.opBlobBaseFee(),
             .SELFBALANCE => try self.opSelfBalance(),
 
             // Hashing
@@ -2344,6 +2350,32 @@ pub const EVM = struct {
         // EIP-1559 base fee - simplified for now
         const base_fee = types.U256.fromU64(1000000000); // 1 gwei
         try self.stack.push(self.allocator, base_fee);
+        self.gas_used += 2;
+    }
+
+    fn opBlobHash(self: *EVM) !void {
+        // EIP-4844: BLOBHASH - returns versioned hash at index from tx blob list
+        const index = try self.stack.pop();
+        // If any upper limb is nonzero, index exceeds possible slice length
+        if (index.limbs[1] != 0 or index.limbs[2] != 0 or index.limbs[3] != 0) {
+            try self.stack.push(self.allocator, types.U256.zero());
+        } else if (self.context.blob_versioned_hashes) |hashes| {
+            const idx = index.limbs[0];
+            if (idx < hashes.len) {
+                try self.stack.push(self.allocator, types.U256.fromBytes(hashes[@intCast(idx)].bytes));
+            } else {
+                try self.stack.push(self.allocator, types.U256.zero());
+            }
+        } else {
+            try self.stack.push(self.allocator, types.U256.zero());
+        }
+        self.gas_used += 3;
+    }
+
+    fn opBlobBaseFee(self: *EVM) !void {
+        // EIP-7516: BLOBBASEFEE - pushes current block blob base fee
+        const fee = if (self.context.block_blob_base_fee) |f| types.U256.fromU64(f) else types.U256.zero();
+        try self.stack.push(self.allocator, fee);
         self.gas_used += 2;
     }
 
@@ -3276,6 +3308,8 @@ pub const Opcode = enum(u8) {
     CHAINID = 0x46,
     SELFBALANCE = 0x47,
     BASEFEE = 0x48,
+    BLOBHASH = 0x49, // EIP-4844 (Cancun)
+    BLOBBASEFEE = 0x4a, // EIP-7516 (Cancun)
 
     // 50s: Stack, Memory, Storage and Flow Operations
     POP = 0x50,
@@ -3415,6 +3449,13 @@ const Stack = struct {
             return error.StackUnderflow;
         }
         return self.items.pop() orelse return error.StackUnderflow;
+    }
+
+    pub fn peek(self: *const Stack) !types.U256 {
+        if (self.items.items.len == 0) {
+            return error.StackUnderflow;
+        }
+        return self.items.items[self.items.items.len - 1];
     }
 };
 
